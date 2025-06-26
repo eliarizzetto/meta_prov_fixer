@@ -1,0 +1,23 @@
+# Python and IDEs
+.idea/
+.vscode/
+*.pyc
+*.log
+__pycache__/
+
+# Packaging
+dist/
+build/
+
+# Environments
+env/
+dist/
+
+# Local development and testing
+**local
+**prove.py
+**tmp.py
+**tmp
+notes.txt
+
+
