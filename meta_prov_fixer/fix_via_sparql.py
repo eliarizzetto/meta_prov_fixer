@@ -2,7 +2,7 @@ import logging
 import yaml
 import time
 import argparse
-from typing import List, Tuple, Union, Dict, Set, Iterable
+from typing import List, Tuple, Union, Dict, Set, Iterable, Generator, Any
 from pathlib import Path
 from string import Template
 
@@ -27,16 +27,10 @@ class ProvenanceFixer:
         if auth:
             self.sparql.addCustomHttpHeader("Authorization", auth)
 
-        self._load_queries(queries_fp)
-
         logging.basicConfig(
             level=logging.DEBUG,
             format="%(asctime)s - %(levelname)s - %(message)s"
         )
-
-    def _load_queries(self, path: str):
-        with open(path, 'r', encoding='utf-8') as f:
-            self.queries = yaml.safe_load(f)
 
     def _query(self, query: str, retries: int = 3, delay: float = 2.0) -> Union[dict, None]:
         for attempt in range(retries):
@@ -51,6 +45,44 @@ class ProvenanceFixer:
                     logging.error("Max retries reached. Query failed.")
                     return None
 
+    def _paginate_query(self, query_template: str, limit: int = 100000, sleep: float = 0.5) -> Generator[List[Dict[str, Any]], None, None]:
+        """
+        Executes a paginated SPARQL SELECT query and yields result bindings in batches.
+
+        This method is designed to handle pagination by incrementing the OFFSET in the 
+        provided SPARQL query template. It assumes that the query returns results in a 
+        structure compatible with the SPARQL JSON results format.
+
+        :param query_template: A SPARQL query string with two `%d` placeholders 
+                            for offset and limit values (in that order).
+        :type query_template: str
+        :param limit: The number of results to fetch per page. Defaults to 100000.
+        :type limit: int
+        :param sleep: Number of seconds to wait between successive queries to avoid overwhelming the endpoint. Defaults to 0.5 seconds.
+        :type sleep: float
+
+        :yield: A list of SPARQL result bindings (each a dictionary with variable bindings).
+        :rtype: Generator[List[Dict[str, Any]], None, None]
+        """
+        offset = 0
+        while True:
+            query = query_template % (offset, limit)
+            logging.info(f"Fetching results {offset} to {offset + limit}...")
+            result_batch = self._query(query)
+
+            if result_batch is None:
+                break
+
+            bindings = result_batch["results"]["bindings"]
+            if not bindings:
+                break
+
+            yield bindings
+            offset += limit
+            time.sleep(sleep)
+
+    # (1) Delete filler snapshots and fix the rest of the graph -> move to daughter class FillerFixer
+
     def fetch_snapshots_to_delete(self, limit=10000) -> Dict[str, Dict[str, Set[str]]]:
         """
         Fetches snapshots that are fillers and need to be deleted, grouped by their named graph.
@@ -59,7 +91,6 @@ class ProvenanceFixer:
         :return: A dictionary with graph URIs as keys and dictionaries with 'to_delete' and 'remaining_snapshots' sets as values.
         :rtype: Dict[str, Dict[str, Set[str]]]
         """
-        offset = 0
         grouped_result = defaultdict(lambda: {'to_delete': set(), 'remaining_snapshots': set()})
 
         template = """
@@ -96,26 +127,15 @@ class ProvenanceFixer:
         """
         # Pagination loop
         logging.info("Fetching filler snapshots (to be deleted) with pagination...")
-        while True:
-            q = template % (offset, limit)
-            logging.info(f"Fetching results {offset} to {offset + limit}...")
-            result_batch = self._query(q)
-            bindings = result_batch["results"]["bindings"]
-
-            if not bindings:
-                break
-
+        for current_bindings in self._paginate_query(template, limit):
             # group query results
-            for binding in bindings:
-                g = binding['g']['value']
-                snapshot = binding['snapshot']['value']
-                other_se = binding['other_se']['value']
+            for b in current_bindings:
+                g = b['g']['value']
+                snapshot = b['snapshot']['value']
+                other_se = b['other_se']['value']
                 
                 grouped_result[g]['to_delete'].add(snapshot)
                 grouped_result[g]['remaining_snapshots'].add(other_se)
-
-            offset += limit
-            time.sleep(0.5)
 
         logging.info(f"{sum([len(d['to_delete']) for d in grouped_result.values()])} snapshots marked for deletion.")
         return dict(grouped_result)
@@ -320,15 +340,15 @@ class ProvenanceFixer:
                 self._query(query)
                 logging.info(f"Replaced the value of invalidatedAtTime for {s} with the value of generatedAtTime for {following_se} in graph {graph_uri}.")
 
-    # TODO: (2) CORREZIONE DATETIME -> sposta in classe separata
+    
+    # (2) DATETIME values correction -> move in daughter class DateTimeFixer
 
-    def fetch_illformed_datetimes(self, limit=1000):
+    def fetch_illformed_datetimes(self, limit=1000000):
         """
         Fetches all quads where the datetime object value is not syntactically correct or complete, including cases where
         the timezone is not specified (which would make the datetime impossible to compare with other offset-aware datetimes) 
         and/or where the time value includes microseconds. Querying is paginated.
         """
-        offset = 0
         result = []
 
         template = r'''
@@ -352,26 +372,15 @@ class ProvenanceFixer:
         '''
         # Pagination loop
         logging.info("Fetching ill-formed datetime values with pagination...")
-        while True:
-            q = template % (offset, limit)
-            logging.info(f"Fetching results {offset} to {offset + limit}...")
-            result_batch = self._query(q)
-            bindings = result_batch["results"]["bindings"]
-
-            if not bindings:
-                break
-
+        for current_bindings in self._paginate_query(template, limit):
             # group query results
-            for binding in bindings:
-                g = binding['g']['value']
-                s = binding['s']['value']
-                p = binding['p']['value']
-                dt = binding['dt']['value']
+            for b in current_bindings:
+                g = b['g']['value']
+                s = b['s']['value']
+                p = b['p']['value']
+                dt = b['dt']['value']
                 
                 result.append((g, s, p, dt))
-
-            offset += limit
-            time.sleep(0.5)
 
         logging.info(f"Fetched {len(result)} quads with a badly formed datetime object value.")
         return result
@@ -414,7 +423,7 @@ class ProvenanceFixer:
                 self._query(query)
                 logging.info(f"Fixed datetime values for quads {i} to {len(batch)}.")
 
-    # TODO: (3) CORREZIONE DEGLI SNAPSHOT DI CREAZIONE SENZA PRIMARY SOURCE -> sposta in classe separata
+    # (3) correct creation snapshots without primary source -> move to daughter class MissingPrimSourceFixer
 
     def get_previous_meta_dump_uri(dt:str)-> str:
         """
@@ -457,25 +466,23 @@ class ProvenanceFixer:
         :return: A list of tuples with graph URI and snapshot URI.
         :rtype: List[Tuple[str, str]]
         """
-
-        offset = 0
         results = []
 
         template = """
         PREFIX prov: <http://www.w3.org/ns/prov#>
 
         SELECT ?s ?genTime WHERE {
-            {
-                SELECT DISTINCT ?s ?genTime WHERE {
-                    GRAPH ?g {
-                        ?s a prov:Entity ;
-                        prov:generatedAtTime ?genTime .
-                        FILTER NOT EXISTS { ?s prov:hadPrimarySource ?anySource }
-                        FILTER(REGEX(STR(?s), "/prov/se/1$"))  # escape the dollar sign if using string.Template compiling
-                    }
-                }
-                ORDER BY ?s
+          {
+            SELECT DISTINCT ?s ?genTime WHERE {
+              GRAPH ?g {
+                ?s a prov:Entity ;
+                prov:generatedAtTime ?genTime .
+                FILTER NOT EXISTS { ?s prov:hadPrimarySource ?anySource }
+                FILTER(REGEX(STR(?s), "/prov/se/1$"))  # escape the dollar sign if using string.Template compiling
+              }
             }
+            ORDER BY ?s
+          }
         }
         OFFSET %d
         LIMIT %d
@@ -483,22 +490,11 @@ class ProvenanceFixer:
 
         # Pagination loop
         logging.info("Fetching creation snapshots without a primary source with pagination...")
-        while True:
-            q = template % (offset, limit)
-            logging.info(f"Fetching results {offset} to {offset + limit}...")
-            result_batch = self._query(q)
-            bindings = result_batch["results"]["bindings"]
-
-            if not bindings:
-                break
-
-            for binding in bindings:
-                s = binding["s"]["value"]
-                gen_time = binding["genTime"]["value"]
+        for current_bindings in self._paginate_query(template, limit):
+            for b in current_bindings:
+                s = b["s"]["value"]
+                gen_time = b["genTime"]["value"]
                 results.append((s, gen_time))
-
-            offset += limit
-            time.sleep(0.5)
         
         return results # (<snapshot uri>, <oldest gen. dt in graph>)
     
@@ -534,40 +530,44 @@ class ProvenanceFixer:
                 logging.info(f"Inserted primary sources for creation snapshots {i} to {len(batch)}.")
                 
 
-    # TODO: (4) CORREZIONE DEGLI SNAPSHOT CON PIù VALORI PER wasAttributedTo -> sposta in classe separata
+    # TODO: (4) Correct snapshots with multiple objects for prov:wasAttributedTo -> move in daughter class MultiPAFixer
 
-    def fetch_snapshots_multi_pa(self):
+    def fetch_snapshots_multi_pa(self, limit=10000):
         """
         Fetches graph-snapshot pairs where the snapshot has more than one object for the ``prov:wasAttributedTo`` property.
         """
         result = []
 
-        q = """
+        template = """
         PREFIX prov: <http://www.w3.org/ns/prov#>
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
         SELECT ?g ?s
         WHERE {
-          GRAPH ?g {
-            ?s prov:wasAttributedTo <https://w3id.org/oc/meta/prov/pa/1> .
-            FILTER EXISTS {
-              ?s prov:wasAttributedTo ?other_pa
-              FILTER (?other_pa != <https://w3id.org/oc/meta/prov/pa/1>)
+          {
+            SELECT ?g ?s
+            WHERE {
+              GRAPH ?g {
+                ?s prov:wasAttributedTo <https://w3id.org/oc/meta/prov/pa/1> .
+                FILTER EXISTS {
+                  ?s prov:wasAttributedTo ?other_pa
+                  FILTER (?other_pa != <https://w3id.org/oc/meta/prov/pa/1>)
+                }
+              }
             }
+            ORDER BY ?g
           }
         }
+        OFFSET %d
+        LIMIT %d
         """
 
         logging.info("Fetching snapshots with multiple objects for prov:wasAttributedTo...")
-        query_result = self._query(q)
-        bindings = query_result["results"]["bindings"]
-        if not bindings:
-            logging.info("No snapshots with multiple objects for prov:wasAttributedTo were found.")
-            return result 
-        for b in bindings:
-            g = b['g']['value']
-            s = b['s']['value']
-            result.append((g, s))
+        for current_bindings in self._paginate_query(template, limit):
+            for b in current_bindings:
+                g = b['g']['value']
+                s = b['s']['value']
+                result.append((g, s))
         logging.info(f"Found {len(result)} snapshots with multiple objects for prov:wasAttributedTo.")
         return result
 
@@ -599,70 +599,7 @@ class ProvenanceFixer:
                 logging.info(f"Deleted triples with default processing agent from snapshots {i} to {len(batch)}.")
 
 
-    # TODO: (5) CORREZIONE DEI GRAFI CON SNAPSHOTS CON TROPPI OGGETTI -> sposta in classe separata
-
-    # def get_multiple_objects_graphs_and_min_gen_time(self, limit=10000) -> List[Tuple[str, str]]:
-    #     """
-    #     Fetches graphs containing at least one snapshot with multiple objects for 
-    #     a property that only admits one (e.g. oc:hasUpdateQuery) AND the oldest datetime value 
-    #     for the property prov:generatedAtTime for any subject in the named graph itself. 
-    #     The query raises the follwing error: Virtuoso 42000 Error The estimated execution time 1644 (sec) 
-    #     exceeds the limit of 900 (sec).
-
-    #     :return: A list of distinct graph URIs.
-    #     """
-    #     offset = 0
-    #     output = []
-
-    #     template = """
-    #     PREFIX prov: <http://www.w3.org/ns/prov#>
-    #     PREFIX oc: <https://w3id.org/oc/ontology/>
-
-    #     SELECT ?g (MIN(?genTime) AS ?minGenTime)
-    #     WHERE {
-    #       {
-    #         SELECT DISTINCT ?g
-    #         WHERE {
-    #           GRAPH ?g {
-    #             VALUES ?p { prov:invalidatedAtTime prov:hadPrimarySource oc:hasUpdateQuery }
-    #             ?s ?p ?o ;
-    #               a prov:Entity .
-    #             FILTER EXISTS {
-    #               ?s ?p ?o2 .
-    #               FILTER (?o2 != ?o)
-    #             }
-    #           }
-    #         }
-    #         ORDER BY ?g
-    #       }
-    #       GRAPH ?g {
-    #         ?_s prov:generatedAtTime ?genTime .
-    #       }
-    #     }
-    #     OFFSET %d
-    #     LIMIT %d
-    #     """
-
-    #     logging.info("Fetching URIs of graphs containing snapshots with too many objects...")
-    #     while True:
-    #         q = template % (offset, limit)
-    #         logging.info(f"Fetching results {offset} to {offset + limit}...")
-    #         result_batch = self._query(q)
-    #         bindings = result_batch["results"]["bindings"]
-
-    #         if not bindings:
-    #             break
-
-    #         for binding in bindings:
-    #             g = binding['g']['value']
-    #             min_gen_time = binding['minGenTime']['value']
-    #             output.append((g, min_gen_time))
-
-    #         offset += limit
-    #         time.sleep(0.5)
-        
-    #     logging.info(f"Found {len(output)} distinct graphs containing snapshots with too many objects for some properties.")
-    #     return output
+    # (5) Correct graphs where at least one snapshots has too many objects for specific properties -> move to daughter class MultiObjectFixer
         
     def fetch_multiple_objects_graphs(self, limit=10000) -> List[str]:
         """
@@ -671,7 +608,6 @@ class ProvenanceFixer:
 
         :return: A list of distinct graph URIs.
         """
-        offset = 0
         output = []
 
         template = """
@@ -705,21 +641,10 @@ class ProvenanceFixer:
         """
 
         logging.info("Fetching URIs of graphs containing snapshots with too many objects...")
-        while True:
-            q = template % (offset, limit)
-            logging.info(f"Fetching results {offset} to {offset + limit}...")
-            result_batch = self._query(q)
-            bindings = result_batch["results"]["bindings"]
-
-            if not bindings:
-                break
-
-            for binding in bindings:
-                g = binding['g']['value']
+        for current_bindings in self._paginate_query(template, limit):
+            for b in current_bindings:
+                g = b['g']['value']
                 output.append(g)
-
-            offset += limit
-            time.sleep(0.5)
         
         logging.info(f"Found {len(output)} distinct graphs containing snapshots with too many objects for some properties.")
         return output
@@ -793,49 +718,3 @@ class ProvenanceFixer:
             else:
                 self._query(query)
                 logging.info(f"Overwritten {g} with new creation snapshot.")
-
-    
-    # TODO: create parent class and rename + restructure this class as specific process for handling filler snapshots
-
-    def process(self):
-        start = time.time()
-
-        to_delete = self.fetch_snapshots_to_delete()
-        if not to_delete:
-            logging.info("No snapshots to delete. Exiting.")
-            return
-
-        self.delete_snapshots(to_delete)
-
-        for graph_uri, d in tqdm(to_delete.items(), desc="Renaming snapshots"):
-            mapping = self.map_se_names(d['to_delete'], d['remaining_snapshots'])
-            self.rename_snapshots(mapping)
-
-            current_snapshots_sorted = sorted({v for v in mapping.values()}, key=lambda x: get_seq_num(x))
-            self.adapt_invalidatedAtTime(graph_uri, current_snapshots_sorted)
-            
-
-        elapsed = time.time() - start
-        logging.info(f"Process completed in {elapsed:.2f} seconds.")
-
-
-def cli():
-    parser = argparse.ArgumentParser(description="Fix provenance snapshot sequences by deleting and renumbering.")
-    parser.add_argument('--endpoint', type=str, required=True, help='SPARQL endpoint URL')
-    parser.add_argument('--queries', type=str, default="queries.yaml", help='Path to YAML file with SPARQL queries')
-    parser.add_argument('--auth', type=str, default=None, help='Optional Authorization header')
-    parser.add_argument('--dry-run', action='store_true', help='Do not modify the triplestore (simulate actions)')
-
-    args = parser.parse_args()
-
-    fixer = ProvenanceFixer(
-        sparql_endpoint=args.endpoint,
-        queries_fp=args.queries,
-        auth=args.auth,
-        dry_run=args.dry_run
-    )
-    fixer.process()
-
-
-# if __name__ == "__main__":
-#     cli()
