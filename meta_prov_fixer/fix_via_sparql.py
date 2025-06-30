@@ -14,7 +14,7 @@ from collections import defaultdict
 from datetime import date
 import warnings
 
-from meta_prov_fixer.utils import get_seq_num, remove_seq_num, get_described_res_omid, get_graph_uri_from_se_uri
+from meta_prov_fixer.utils import get_seq_num, remove_seq_num, get_described_res_omid, get_graph_uri_from_se_uri, normalise_datetime
 
 
 class ProvenanceFixer:
@@ -51,7 +51,7 @@ class ProvenanceFixer:
                     logging.error("Max retries reached. Query failed.")
                     return None
 
-    def get_snapshots_to_delete(self) -> Dict[str, Dict[str, Set[str]]]:
+    def fetch_snapshots_to_delete(self, limit=10000) -> Dict[str, Dict[str, Set[str]]]:
         """
         Fetches snapshots that are fillers and need to be deleted, grouped by their named graph.
         Returns a dictionary where keys are graph URIs and values are dictionaries with 'to_delete' and 'remaining_snapshots' sets,
@@ -59,45 +59,99 @@ class ProvenanceFixer:
         :return: A dictionary with graph URIs as keys and dictionaries with 'to_delete' and 'remaining_snapshots' sets as values.
         :rtype: Dict[str, Dict[str, Set[str]]]
         """
-        query = self.queries['select_fillers']
-        logging.info("Fetching snapshots to delete...")
-        query_result = self._query(query)
-
-        if not query_result:
-            return {}
-
+        offset = 0
         grouped_result = defaultdict(lambda: {'to_delete': set(), 'remaining_snapshots': set()})
-        
-        # group query results
-        for binding in query_result['results']['bindings']:
-            g = binding['g']['value']
-            snapshot = binding['snapshot']['value']
-            other_se = binding['other_se']['value']
-            
-            grouped_result[g]['to_delete'].add(snapshot)
-            grouped_result[g]['remaining_snapshots'].add(other_se)
+
+        template = """
+        PREFIX prov: <http://www.w3.org/ns/prov#>
+        PREFIX dcterms: <http://purl.org/dc/terms/>
+        PREFIX oc: <https://w3id.org/oc/ontology/>
+
+        SELECT ?g ?snapshot ?other_se
+        WHERE {
+          {
+            SELECT DISTINCT ?g ?snapshot ?other_se
+            WHERE {
+              GRAPH ?g {
+                {
+                  ?snapshot a prov:Entity .
+                  OPTIONAL {
+                    ?snapshot dcterms:description ?description .
+                  }
+                  FILTER (!regex(str(?snapshot), "/prov/se/1$"))
+                  FILTER (!bound(?description) || !CONTAINS(LCASE(str(?description)), "merged"))
+                  FILTER NOT EXISTS {
+                    ?snapshot oc:hasUpdateQuery ?q .
+                  }
+                }
+                ?other_se ?p ?o .
+                FILTER (?other_se != ?snapshot)
+              }
+            }
+            ORDER BY ?g
+          }
+        }
+        OFFSET %d
+        LIMIT %d
+        """
+        # Pagination loop
+        logging.info("Fetching filler snapshots (to be deleted) with pagination...")
+        while True:
+            q = template % (offset, limit)
+            logging.info(f"Fetching results {offset} to {offset + limit}...")
+            result_batch = self._query(q)
+            bindings = result_batch["results"]["bindings"]
+
+            if not bindings:
+                break
+
+            # group query results
+            for binding in bindings:
+                g = binding['g']['value']
+                snapshot = binding['snapshot']['value']
+                other_se = binding['other_se']['value']
+                
+                grouped_result[g]['to_delete'].add(snapshot)
+                grouped_result[g]['remaining_snapshots'].add(other_se)
+
+            offset += limit
+            time.sleep(0.5)
 
         logging.info(f"{sum([len(d['to_delete']) for d in grouped_result.values()])} snapshots marked for deletion.")
         return dict(grouped_result)
 
-    def delete_snapshots(self, deletions: Dict[str, Dict[str, Set[str]]]) -> None:
+    def batch_delete_filler_snapshots(self, deletions: Dict[str, Dict[str, Set[str]]], batch_size=500) -> None:
         """
         Deletes snapshots from the triplestore based on the provided deletions dictionary.
         :param deletions: A dictionary where keys are graph URIs and values are dictionaries with 'to_delete' and 'remaining_snapshots' sets.
         :type deletions: Dict[str, Dict[str, Set[str]]]
         """
-        template = Template(self.queries['delete_multi_snapshot'])
 
-        for graph_uri, values in tqdm(deletions.items(), desc="Deleting snapshots"):
-            to_delete = " ".join([f"<{se_uri}>" for se_uri in sorted(values['to_delete'], key=lambda x: get_seq_num(x))])
-            query = template.substitute(graph=graph_uri, snapshots_to_delete=to_delete)
+        template = """
+        DELETE WHERE {
+            $dels
+        }
+        """
+
+        logging.info("Deleting filler snapshots in batches...")
+        for i in range(0, len(deletions), batch_size):
+            batch = deletions.items()[i:i + batch_size]
+            dels = []
+            for g_uri, values in batch:
+                for se_to_delete in values['to_delete']:
+                    single_del = f"GRAPH <{g_uri}> {{ <{se_to_delete}> ?p ?o . }}\n"
+                    dels.append(single_del)
+            dels_str = "    ".join(dels)
+
+            query = template.substitute(dels=dels_str)
+
             if self.dry_run:
-                logging.info(f"[Dry-run] Would delete the following snapshots from graph {graph_uri}: {to_delete}")
+                logging.info(f"[Dry-run] Would delete triples of filler snapshots in graphs {i} to {len(batch)}.")
             else:
                 self._query(query)
-                logging.info(f"Deleted from graph {graph_uri} the following snapshots: {to_delete}")
+                logging.info(f"Deleted triples of filler snapshots in graphs {i} to {len(batch)}.")
 
-    def map_se_names(self, to_delete:set, remaining: set) -> dict:
+    def map_se_names(to_delete:set, remaining: set) -> dict:
         """
         For each snapshot in the union of to_delete and remaining (containing snapshots URIs), generates a new URI.
         Values in mapping dictionary are not unique, i.e., multiple old URIs can be mapped to the same new URI.
@@ -182,7 +236,7 @@ class ProvenanceFixer:
         :param mapping: A dictionary where keys are old snapshot URIs and values are new snapshot URIs.
         :type mapping: dict
         """
-
+        # TODO: consider modifying the query template to support bulk updates (using UNION in the WHERE block)
         # !IMPORTANT: mapping is sorted ascendingly by the sequence number of old URI (get_sequence_number on mapping's keys)
         # This is required, otherwise newly inserted URIs might be deleted when iterating over mapping's items
         mapping = dict(sorted(mapping.items(), key=lambda i: get_seq_num(i[0])))
@@ -190,31 +244,69 @@ class ProvenanceFixer:
             logging.info(f"[Dry-run] Would rename snapshots in the whole graph according to the following mapping: {mapping}")
             return
         
-        template = Template(self.queries['rename_snapshots_global'])
+        template = Template("""
+        DELETE {
+          GRAPH ?g {
+            <$old_uri> ?p ?o .
+            ?s ?p2 <$old_uri> .
+          }
+        }
+        INSERT {
+          GRAPH ?g {
+            <$new_uri> ?p ?o .
+            ?s ?p2 <$new_uri> .
+          }
+        }
+        WHERE {
+          GRAPH ?g {
+            {
+              <$old_uri> ?p ?o .
+            }
+            UNION
+            {
+              ?s ?p2 <$old_uri> .
+            }
+          }
+        }
+        """)
 
         logging.info("Renaming snapshots in the triplestore...")
         for old_uri, new_uri in mapping.items():
             query = template.substitute(old_uri=old_uri, new_uri=new_uri)
-            # self.sparql.setQuery(query)  # is this line necessary?
             self._query(query)
         logging.info(f"Snapshot entities were re-named in all named graphs according to the following mapping: {mapping}.")
     
-
-
-    # TODO: (2) CORREZIONE DATETIME -> sposta in classe separata
-
     def adapt_invalidatedAtTime(self, graph_uri: str, snapshots: list) -> None:
         """
-        Updates the ``invalidatedAtTime`` property of each snapshot in the provided list to match 
-        the value of ``generatedAtTime`` of the following snapshot.
+        Updates the ``prov:invalidatedAtTime`` property of each snapshot in the provided list to match 
+        the value of ``prov:generatedAtTime`` of the following snapshot.
         :param graph_uri: The URI of the named graph containing the snapshots.
         :type graph_uri: str
         :param snapshots: A list of snapshot URIs sorted by their sequence number.
         :type snapshots: list
         """
         
+        # TODO: consider modifying the query template to support bulk updates
         snapshots = sorted(snapshots, key=lambda x: get_seq_num(x))  # sorting is required!
-        template = Template(self.queries['adapt_invalidatedAtTime'])
+        template = Template("""
+        PREFIX prov: <http://www.w3.org/ns/prov#>
+
+        # WITH <$graph>
+        DELETE {
+          GRAPH <$graph> { <$snapshot> prov:invalidatedAtTime ?old_time . }
+        }
+        INSERT {
+          GRAPH <$graph> { <$snapshot> prov:invalidatedAtTime ?new_time . }
+        }
+        WHERE {
+          GRAPH <$graph> {
+            OPTIONAL {
+              <$snapshot> prov:invalidatedAtTime ?old_time .
+            }
+            <$following_snapshot> prov:generatedAtTime ?new_time .
+          }
+        }
+        """)
 
         for s, following_se in zip(snapshots, snapshots[1:]):
             query = template.substitute(
@@ -228,6 +320,99 @@ class ProvenanceFixer:
                 self._query(query)
                 logging.info(f"Replaced the value of invalidatedAtTime for {s} with the value of generatedAtTime for {following_se} in graph {graph_uri}.")
 
+    # TODO: (2) CORREZIONE DATETIME -> sposta in classe separata
+
+    def fetch_illformed_datetimes(self, limit=1000):
+        """
+        Fetches all quads where the datetime object value is not syntactically correct or complete, including cases where
+        the timezone is not specified (which would make the datetime impossible to compare with other offset-aware datetimes) 
+        and/or where the time value includes microseconds. Querying is paginated.
+        """
+        offset = 0
+        result = []
+
+        template = r'''
+        PREFIX prov: <http://www.w3.org/ns/prov#>
+        
+        SELECT ?g ?s ?p ?dt
+        WHERE {
+          {
+            SELECT ?g ?s ?p ?dt WHERE {
+              GRAPH ?g {
+                VALUES ?p {prov:generatedAtTime prov:invalidatedAtTime}
+                ?s ?p ?dt .
+                FILTER (!REGEX(STR(?dt), "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:(?:\\+00:00)|Z)$"))
+              }
+            }
+            ORDER BY ?s
+          }
+        }
+        OFFSET %d
+        LIMIT %d
+        '''
+        # Pagination loop
+        logging.info("Fetching ill-formed datetime values with pagination...")
+        while True:
+            q = template % (offset, limit)
+            logging.info(f"Fetching results {offset} to {offset + limit}...")
+            result_batch = self._query(q)
+            bindings = result_batch["results"]["bindings"]
+
+            if not bindings:
+                break
+
+            # group query results
+            for binding in bindings:
+                g = binding['g']['value']
+                s = binding['s']['value']
+                p = binding['p']['value']
+                dt = binding['dt']['value']
+                
+                result.append((g, s, p, dt))
+
+            offset += limit
+            time.sleep(0.5)
+
+        logging.info(f"Fetched {len(result)} quads with a badly formed datetime object value.")
+        return result
+    
+    def batch_fix_illformed_datetimes(self, quads: list, batch_size=500):
+        """
+        Replaces the datetime object of each quad in ``quads`` with its correct version (offset-aware and without microseconds).
+        Note that ``xsd:dateTime`` is always made explicit in newly inserted values.
+        N.B.: if a snapshot has multiple objects for ``prov:invalidatedAtTime`` or ``prov:generatedAtTime`` (though this should never 
+        be the case), they all get deleted and replaced with a single, correct, value.
+        """
+
+        template = Template('''
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+        DELETE WHERE {
+          $to_delete
+        } ;
+        INSERT DATA {
+          $to_insert
+        }
+        ''')
+
+        for i in range(0, len(quads), batch_size):
+            batch = quads[i:i + batch_size]
+            to_delete = []
+            to_insert = []
+            for g, s, p, dt in batch:
+                
+                to_delete.append(f"GRAPH <{g}> {{ <{s}> <{p}> ?ill_dt . }}\n")
+                correct_dt = normalise_datetime(dt)
+                to_insert.append(f'GRAPH <{g}> {{ <{s}> <{p}> "{correct_dt}"^^xsd:dateTime . }}\n')
+            
+            to_delete_str = "  ".join(to_delete)
+            to_insert_str = "  ".join(to_insert)
+            query = template.substitute(to_delete=to_delete_str, to_insert=to_insert_str)
+            if self.dry_run:
+                logging.info(f"[Dry-run] Would fix datetime values for quads {i} to {len(batch)}.")
+            else:
+                self._query(query)
+                logging.info(f"Fixed datetime values for quads {i} to {len(batch)}.")
 
     # TODO: (3) CORREZIONE DEGLI SNAPSHOT DI CREAZIONE SENZA PRIMARY SOURCE -> sposta in classe separata
 
@@ -264,28 +449,18 @@ class ProvenanceFixer:
             warnings.warn(f'get_previous_meta_dump_uri(): {dt} follows the publication date of the latest Meta dump. The register of published dumps might need to be updated!') 
             return meta_dumps_pub_dates[-1][1] # picks latest dump in the register
     
-    def get_creation_no_primary_source(self, limit=1000000) -> List[Tuple[str, str]]:
+
+    def fetch_creation_no_primary_source(self, limit=1000000) -> List[Tuple[str, str]]:
         """
         Fetches creation snapshots that do not have a primary source.
         Returns a list of tuples containing the graph URI and the snapshot URI.
         :return: A list of tuples with graph URI and snapshot URI.
         :rtype: List[Tuple[str, str]]
         """
-        # query = self.queries['select_creation_without_primsource']
-        # logging.info("Fetching creation snapshots without a primary source...")
-        # query_result = self._query(query)
-
-        # if not query_result:
-        #     logging.info("No creation snapshots without a primary source found.")
-        #     return []
-
-        # output = [(binding['s']['value'], binding['genTime']['value']) for binding in query_result['results']['bindings']]
-        # logging.info(f"Found {len(output)} creation snapshots without a primary source.")
-
-        # return output
 
         offset = 0
         results = []
+
         template = """
         PREFIX prov: <http://www.w3.org/ns/prov#>
 
@@ -326,24 +501,6 @@ class ProvenanceFixer:
             time.sleep(0.5)
         
         return results # (<snapshot uri>, <oldest gen. dt in graph>)
-
-    def insert_missing_primsource(self, snapshot_uri, prim_source_uri):
-        """
-        Inserts 'prim_source_uri' as the object of prov:hadPrimarySource for the entity identified by 'snapshot_uri'.
-        :param snapshot_uri: The URI of the (creation) snapshot that is missing a primary source.
-        :param prim_source_uri: The URI of the primary source to add (should be the DOI of an OpenCitations Meta dump version).
-        """
-        template = Template(self.queries['insert_prim_source'])
-        query = template.substitute(
-            snapshot = snapshot_uri,
-            source = prim_source_uri
-        )
-            
-        if self.dry_run:
-            logging.info(f"[Dry-run] Would assign {prim_source_uri} as primary source of {snapshot_uri} in the triplestore.")
-        else:
-            self._query(query)
-            logging.info(f"Added {prim_source_uri} as primary source of {snapshot_uri}.")
     
     def batch_insert_missing_primsource(self, creations_to_fix: List[Tuple[str, str]], batch_size=500):
         """
@@ -354,11 +511,8 @@ class ProvenanceFixer:
         :type batch_size: int
         :return: None
         """
-        # da implementare: usa INSERT DATA senza WHERE. La query che mandi dev'essere del tipo:
-        # INSERT DATA { GRAPH <$grafoX> {<$snapshotX1> prov:hadPrimarySource <$sourceX1>} GRAPH <$grafoY> {<$snapshotY1> prov:hadPrimarySource <$sourceY1> } GRAPH {...} }, 
-        # in questa funzione devi anche assegnare a `prim_source_uri` il valore di `get_previous_meta_dump_uri(snapshot_uri)` per ogni snapshot che non ha un primary source.
         template = Template("""
-        PPREFIX prov: <http://www.w3.org/ns/prov#>
+        PREFIX prov: <http://www.w3.org/ns/prov#>
 
         INSERT DATA {
             $quads
@@ -382,42 +536,194 @@ class ProvenanceFixer:
 
     # TODO: (4) CORREZIONE DEGLI SNAPSHOT CON PIù VALORI PER wasAttributedTo -> sposta in classe separata
 
+    def fetch_snapshots_multi_pa(self):
+        """
+        Fetches graph-snapshot pairs where the snapshot has more than one object for the ``prov:wasAttributedTo`` property.
+        """
+        result = []
 
-    def update_snapshots_multi_pa(self):
+        q = """
+        PREFIX prov: <http://www.w3.org/ns/prov#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+        SELECT ?g ?s
+        WHERE {
+          GRAPH ?g {
+            ?s prov:wasAttributedTo <https://w3id.org/oc/meta/prov/pa/1> .
+            FILTER EXISTS {
+              ?s prov:wasAttributedTo ?other_pa
+              FILTER (?other_pa != <https://w3id.org/oc/meta/prov/pa/1>)
+            }
+          }
+        }
         """
-        Deletes triples where the value of prov:AttributedTo is <https://w3id.org/oc/meta/prov/pa/1> if there is at least another processing agent for the same snapshot subject. 
+
+        logging.info("Fetching snapshots with multiple objects for prov:wasAttributedTo...")
+        query_result = self._query(q)
+        bindings = query_result["results"]["bindings"]
+        if not bindings:
+            logging.info("No snapshots with multiple objects for prov:wasAttributedTo were found.")
+            return result 
+        for b in bindings:
+            g = b['g']['value']
+            s = b['s']['value']
+            result.append((g, s))
+        logging.info(f"Found {len(result)} snapshots with multiple objects for prov:wasAttributedTo.")
+        return result
+
+    def batch_delete_extra_pa(self, multi_pa_snapshots:list, batch_size=500):
         """
-        query = self.queries['delete_default_pa']
-        if self.dry_run:
-            logging.info("[Dry-run] Would delete triples with default processing agent from snapshots with multiple processing agents.")
-        else:
-            logging.info("Deleting triples with default processing agent from snapshots with multiple processing agents...")
-            self._query(query)
-            logging.info("Deleted triples with default processing agent from snapshots with multiple processing agents.")
+        Deletes triples where the value of prov:wasAttributedTo is <https://w3id.org/oc/meta/prov/pa/1> if there is at least another processing agent for the same snapshot subject. 
+        """
+        template = Template("""
+        PREFIX prov: <http://www.w3.org/ns/prov#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+        DELETE DATA {
+          $quads_to_delete
+        }
+        """)
+
+        for i in range(0, len(multi_pa_snapshots), batch_size):
+            batch = multi_pa_snapshots[i:i + batch_size]
+            to_delete = []
+            for g, s in batch:
+                to_delete.append(f"GRAPH <{g}> {{ <{s}> prov:wasAttributedTo <https://w3id.org/oc/meta/prov/pa/1> . }}\n")
+
+            to_delete_str = "  ".join(to_delete)
+            query = template.substitute(quads_to_delete=to_delete_str)
+            if self.dry_run:
+                logging.info(f"[Dry-run] Would delete triples with default processing agent from snapshots {i} to {len(batch)}.")
+            else:
+                self._query(query)
+                logging.info(f"Deleted triples with default processing agent from snapshots {i} to {len(batch)}.")
 
 
     # TODO: (5) CORREZIONE DEI GRAFI CON SNAPSHOTS CON TROPPI OGGETTI -> sposta in classe separata
 
-    def get_multiple_objects_graphs(self) -> list:
+    # def get_multiple_objects_graphs_and_min_gen_time(self, limit=10000) -> List[Tuple[str, str]]:
+    #     """
+    #     Fetches graphs containing at least one snapshot with multiple objects for 
+    #     a property that only admits one (e.g. oc:hasUpdateQuery) AND the oldest datetime value 
+    #     for the property prov:generatedAtTime for any subject in the named graph itself. 
+    #     The query raises the follwing error: Virtuoso 42000 Error The estimated execution time 1644 (sec) 
+    #     exceeds the limit of 900 (sec).
+
+    #     :return: A list of distinct graph URIs.
+    #     """
+    #     offset = 0
+    #     output = []
+
+    #     template = """
+    #     PREFIX prov: <http://www.w3.org/ns/prov#>
+    #     PREFIX oc: <https://w3id.org/oc/ontology/>
+
+    #     SELECT ?g (MIN(?genTime) AS ?minGenTime)
+    #     WHERE {
+    #       {
+    #         SELECT DISTINCT ?g
+    #         WHERE {
+    #           GRAPH ?g {
+    #             VALUES ?p { prov:invalidatedAtTime prov:hadPrimarySource oc:hasUpdateQuery }
+    #             ?s ?p ?o ;
+    #               a prov:Entity .
+    #             FILTER EXISTS {
+    #               ?s ?p ?o2 .
+    #               FILTER (?o2 != ?o)
+    #             }
+    #           }
+    #         }
+    #         ORDER BY ?g
+    #       }
+    #       GRAPH ?g {
+    #         ?_s prov:generatedAtTime ?genTime .
+    #       }
+    #     }
+    #     OFFSET %d
+    #     LIMIT %d
+    #     """
+
+    #     logging.info("Fetching URIs of graphs containing snapshots with too many objects...")
+    #     while True:
+    #         q = template % (offset, limit)
+    #         logging.info(f"Fetching results {offset} to {offset + limit}...")
+    #         result_batch = self._query(q)
+    #         bindings = result_batch["results"]["bindings"]
+
+    #         if not bindings:
+    #             break
+
+    #         for binding in bindings:
+    #             g = binding['g']['value']
+    #             min_gen_time = binding['minGenTime']['value']
+    #             output.append((g, min_gen_time))
+
+    #         offset += limit
+    #         time.sleep(0.5)
+        
+    #     logging.info(f"Found {len(output)} distinct graphs containing snapshots with too many objects for some properties.")
+    #     return output
+        
+    def fetch_multiple_objects_graphs(self, limit=10000) -> List[str]:
         """
         Fetches graphs containing at least one snapshot with multiple objects for 
         a property that only admits one (e.g. oc:hasUpdateQuery).
 
         :return: A list of distinct graph URIs.
         """
-        query = self.queries['select_multi_values_graphs']
+        offset = 0
+        output = []
+
+        template = """
+        PREFIX prov: <http://www.w3.org/ns/prov#>
+        PREFIX oc: <https://w3id.org/oc/ontology/>
+
+        SELECT ?g
+        WHERE {
+          {
+            SELECT DISTINCT ?g WHERE {
+                GRAPH ?g {
+                    VALUES ?p {
+                    prov:invalidatedAtTime
+                    prov:hadPrimarySource
+                    oc:hasUpdateQuery
+                    }
+                    ?s ?p ?o ;
+                      a prov:Entity .
+
+                    FILTER EXISTS {
+                        ?s ?p ?o2 .
+                        FILTER (?o2 != ?o)
+                    }
+                }
+            }
+            ORDER BY ?g
+          }
+        }
+        OFFSET %d
+        LIMIT %d
+        """
+
         logging.info("Fetching URIs of graphs containing snapshots with too many objects...")
-        query_result = self._query(query)
+        while True:
+            q = template % (offset, limit)
+            logging.info(f"Fetching results {offset} to {offset + limit}...")
+            result_batch = self._query(q)
+            bindings = result_batch["results"]["bindings"]
 
-        if not query_result:
-            logging.info("No graphs fetched.")
-            return []
+            if not bindings:
+                break
+
+            for binding in bindings:
+                g = binding['g']['value']
+                output.append(g)
+
+            offset += limit
+            time.sleep(0.5)
         
-        output = [binding['g']['value'] for binding in query_result['results']['bindings']]
         logging.info(f"Found {len(output)} distinct graphs containing snapshots with too many objects for some properties.")
-
         return output
-        
+    
     def reset_multi_object_graphs(self, graphs:list, prim_source_uri:str, pa_uri:str):
         """
         Resets each graph in graphs by deleting the existing snapshots and creating a new 
@@ -428,7 +734,41 @@ class ProvenanceFixer:
         :param pa_uri: The URI of the processing agent to insert as object of prov:wasAttributedTo in the creation snapshot.
         """
 
-        template = Template(self.queries['reset_graph_with_new_creation_se'])
+        template = Template("""
+        PREFIX prov: <http://www.w3.org/ns/prov#>
+        PREFIX dcterms: <http://purl.org/dc/terms/>
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+        #WITH GRAPH <$graph> # WITH clause seems not to be supported in rdflib
+        DELETE {
+          GRAPH <$graph> {
+            ?s ?p ?o
+          }
+        }
+        INSERT {
+          GRAPH <$graph> {
+            <$creation_snapshot> prov:hadPrimarySource <$primary_source> ;
+              prov:wasAttributedTo <$processing_agent> ;
+              prov:specializationOf <$specialization_of> ;
+              dcterms:description "$description"^^xsd:string ;
+              rdf:type prov:Entity ;
+              prov:generatedAtTime ?minGenTime .
+          }
+        }
+        WHERE {
+          {
+            SELECT (MIN(?genTime) AS ?minGenTime) WHERE {
+              GRAPH <$graph> {
+                ?_s prov:generatedAtTime ?genTime .
+              }
+            }
+          }
+          GRAPH <$graph> {
+            ?s ?p ?o .
+          }
+        }
+        """)
 
         logging.info("Resetting graphs with too many objects by creating a new single creation snapshot...")
 
@@ -460,7 +800,7 @@ class ProvenanceFixer:
     def process(self):
         start = time.time()
 
-        to_delete = self.get_snapshots_to_delete()
+        to_delete = self.fetch_snapshots_to_delete()
         if not to_delete:
             logging.info("No snapshots to delete. Exiting.")
             return
