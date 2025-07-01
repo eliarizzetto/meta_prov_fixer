@@ -7,9 +7,12 @@ import tarfile
 import time
 import zipfile
 import lzma
-from typing import Generator, List, Literal, Union
+from typing import Generator, List, Literal, Union, Tuple
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+from datetime import datetime
+from urllib.parse import urlparse
+import warnings
 
 
 # def normalise_datetime(datetime_str: str) -> str:
@@ -230,3 +233,46 @@ def get_graph_uri_from_se_uri(se_uri:str) -> str:
     param se_uri: the URI of the snapshot entity. 
     """
     return se_uri.split('se/', 1)[0]
+
+def validate_meta_dumps_pub_dates(meta_dumps_register:List[Tuple[str, str]]):
+    """
+    Validates the register of published OpenCitations Meta dump. Example of a well-formed register:
+    [
+        ('2022-12-19', 'https://doi.org/10.6084/m9.figshare.21747536.v1'),
+        ('2022-12-20', 'https://doi.org/10.6084/m9.figshare.21747536.v2'),
+        ('2023-02-15', 'https://doi.org/10.6084/m9.figshare.21747536.v3'),
+        ('2023-06-28', 'https://doi.org/10.6084/m9.figshare.21747536.v4'),
+        ('2023-10-26', 'https://doi.org/10.6084/m9.figshare.21747536.v5'),
+        ('2024-04-06', 'https://doi.org/10.6084/m9.figshare.21747536.v6'),
+        ('2024-06-17', 'https://doi.org/10.6084/m9.figshare.21747536.v7'),
+        ('2025-02-02', 'https://doi.org/10.6084/m9.figshare.21747536.v8')
+    ]
+    """
+    meta_dumps_register = sorted(meta_dumps_register, key=lambda x: datetime.strptime(x[0], r'%Y-%m-%d'))
+    if len(meta_dumps_register) < 8: # number of published Meta dumps at the time of writing this code (2025-07-01)
+        raise ValueError("[validate_meta_dumps_pub_dates]: The list of published Meta dumps is incomplete and must be updated.")
+    
+    # warn if the last date is more than 2 months ago
+    last_date = datetime.strptime(meta_dumps_register[-1][0], r'%Y-%m-%d')
+    if (datetime.now() - last_date).days > 60:
+        warnings.warn(f"[validate_meta_dumps_pub_dates]: The latest Meta dump in the register ({last_date.strftime(r'%Y-%m-%d')}) is more than 2 months old. Make sure to update the register with the latest publication dates and DOIs!")
+    
+    for index, item in enumerate(meta_dumps_register):
+        # Check type and length
+        if not isinstance(item, tuple):
+            raise ValueError(f"[validate_meta_dumps_pub_dates]: Item at index {index} is not a tuple: {item}")
+        if len(item) != 2:
+            raise ValueError(f"[validate_meta_dumps_pub_dates]: Tuple at index {index} does not have 2 elements: {item}")
+
+        date_str, url = item
+
+        # Validate ISO date
+        try:
+            datetime.strptime(date_str, r'%Y-%m-%d')
+        except ValueError:
+            raise ValueError(f"[validate_meta_dumps_pub_dates]: Invalid ISO date at index {index}: {date_str}")
+
+        # Validate URL
+        parsed_url = urlparse(url)
+        if not (parsed_url.scheme in ('http', 'https') and parsed_url.netloc):
+            raise ValueError(f"[validate_meta_dumps_pub_dates]: Invalid URL at index {index}: {url}")
