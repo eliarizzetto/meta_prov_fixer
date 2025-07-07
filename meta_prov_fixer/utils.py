@@ -51,9 +51,9 @@ def normalise_datetime(datetime_str: str) -> str:
     return: UTC-aware ISO 8601 string without microseconds.
     """
     datetime_str = datetime_str.replace("^^xsd:dateTime", "")
-    datetime_str = datetime_str.replace("^^http://www.w3.org/2001/XMLSchema#dateTime")
+    datetime_str = datetime_str.replace("^^http://www.w3.org/2001/XMLSchema#dateTime", "")
     datetime_str = datetime_str.replace("^^xsd:string", "")
-    datetime_str = datetime_str.replace("^^http://www.w3.org/2001/XMLSchema#string")
+    datetime_str = datetime_str.replace("^^http://www.w3.org/2001/XMLSchema#string", "")
 
     dt = datetime.fromisoformat(datetime_str)
     

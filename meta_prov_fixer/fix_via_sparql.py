@@ -13,6 +13,7 @@ from tqdm import tqdm
 from collections import defaultdict
 from datetime import date
 import warnings
+import re
 
 from meta_prov_fixer.utils import get_seq_num, remove_seq_num, get_described_res_omid, get_graph_uri_from_se_uri, normalise_datetime, validate_meta_dumps_pub_dates
 
@@ -29,7 +30,7 @@ from meta_prov_fixer.utils import get_seq_num, remove_seq_num, get_described_res
 # ]
 
 class ProvenanceIssueFixer:
-    def __init__(self, meta_dumps_pub_dates, sparql_endpoint: str = 'http://localhost:8890/sparql/', auth: Union[str, None] = None, dry_run: bool = False):
+    def __init__(self, meta_dumps_pub_dates: List[Tuple[str, str]], sparql_endpoint: str = 'http://localhost:8890/sparql/', auth: Union[str, None] = None, dry_run: bool = False):
         self.endpoint = sparql_endpoint
         self.dry_run = dry_run
         self.sparql = SPARQLWrapper(self.endpoint)
@@ -57,6 +58,18 @@ class ProvenanceIssueFixer:
                 else:
                     logging.error("Max retries reached. Query failed.")
                     return None
+    def _update(self, update_query: str, retries: int = 3, delay: float = 2.0) -> None:
+        for attempt in range(retries):
+            try:
+                self.sparql.setQuery(update_query)
+                self.sparql.query()
+                return
+            except Exception as e:
+                logging.warning(f"Attempt {attempt + 1} failed: {e}")
+                if attempt < retries - 1:
+                    time.sleep(delay)
+                else:
+                    logging.error("Max retries reached. Update failed.")
 
     def _paginate_query(self, query_template: str, limit: int = 100000, sleep: float = 0.5) -> Generator[List[Dict[str, Any]], None, None]:
         """
@@ -109,13 +122,13 @@ class FillerFixer(ProvenanceIssueFixer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def detect_issue(self, limit=10000) -> List[str, Dict[str, Set[str]]]:
+    def detect_issue(self, limit=10000) -> List[Tuple[str, Dict[str, Set[str]]]]:
         """
         Fetches snapshots that are fillers and need to be deleted, grouped by their named graph.
         Returns a dictionary where keys are graph URIs and values are dictionaries with 'to_delete' and 'remaining_snapshots' sets,
         storing respectively the URIs of the graph's snapshots that should be deleted and the URIs of the other snapshots.
         :return: A List of 2-items tuples, where the first element is a graph URI and the second element is a dictionary with 'to_delete' and 'remaining_snapshots' as keys and a set as value of both keys.
-        :rtype: List[str, Dict[str, Set[str]]]
+        :rtype: List[Tuple[str, Dict[str, Set[str]]]]
         """
         grouped_result = defaultdict(lambda: {'to_delete': set(), 'remaining_snapshots': set()})
 
@@ -162,22 +175,25 @@ class FillerFixer(ProvenanceIssueFixer):
                 
                 grouped_result[g]['to_delete'].add(snapshot)
                 grouped_result[g]['remaining_snapshots'].add(other_se)
+                # the following is necessary when there are multiple filler snapshots in the same graph
+                grouped_result[g]['remaining_snapshots'].difference_update(grouped_result[g]['to_delete'])
+
 
         logging.info(f"{sum([len(d['to_delete']) for d in grouped_result.values()])} snapshots marked for deletion.")
         return list(dict(grouped_result).items())
 
-    def batch_delete_filler_snapshots(self, deletions: List[str, Dict[str, Set[str]]], batch_size=500) -> None:
+    def batch_delete_filler_snapshots(self, deletions: List[Tuple[str, Dict[str, Set[str]]]], batch_size=500) -> None:
         """
         Deletes snapshots from the triplestore based on the provided deletions dictionary.
         :param deletions: A dictionary where keys are graph URIs and values are dictionaries with 'to_delete' and 'remaining_snapshots' sets.
-        :type deletions: List[str, Dict[str, Set[str]]]
+        :type deletions: List[Tuple[str, Dict[str, Set[str]]]]
         """
 
-        template = """
+        template = Template("""
         DELETE WHERE {
             $dels
         }
-        """
+        """)
 
         logging.debug("Deleting filler snapshots in batches...")
         for i in range(0, len(deletions), batch_size):
@@ -194,7 +210,7 @@ class FillerFixer(ProvenanceIssueFixer):
             if self.dry_run:
                 logging.debug(f"[Dry-run] Would delete triples of filler snapshots in graphs {i} to {len(batch)}.")
             else:
-                self._query(query)
+                self._update(query)
                 logging.debug(f"Deleted triples of filler snapshots in graphs {i} to {len(batch)}.")
 
     @staticmethod
@@ -320,7 +336,7 @@ class FillerFixer(ProvenanceIssueFixer):
         logging.debug("Renaming snapshots in the triplestore...")
         for old_uri, new_uri in mapping.items():
             query = template.substitute(old_uri=old_uri, new_uri=new_uri)
-            self._query(query)
+            self._update(query)
         logging.debug(f"Snapshot entities were re-named in all named graphs according to the following mapping: {mapping}.")
     
     def adapt_invalidatedAtTime(self, graph_uri: str, snapshots: list) -> None:
@@ -364,7 +380,7 @@ class FillerFixer(ProvenanceIssueFixer):
             if self.dry_run:
                 logging.debug(f"[Dry-run] Would replace the value of invalidatedAtTime for {s} with the value of generatedAtTime for {following_se} in graph {graph_uri}.")
             else:
-                self._query(query)
+                self._update(query)
                 logging.debug(f"Replaced the value of invalidatedAtTime for {s} with the value of generatedAtTime for {following_se} in graph {graph_uri}.")
 
     def fix_issue(self):
@@ -473,7 +489,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
             if self.dry_run:
                 logging.debug(f"[Dry-run] Would fix datetime values for quads {i} to {len(batch)}.")
             else:
-                self._query(query)
+                self._update(query)
                 logging.debug(f"Fixed datetime values for quads {i} to {len(batch)}.")
 
     def fix_issue(self):
@@ -595,7 +611,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
             if self.dry_run:
                 logging.debug(f"[Dry-run] Would insert primary sources for creation snapshots {i} to {len(batch)}.")
             else:
-                self._query(query)
+                self._update(query)
                 logging.debug(f"Inserted primary sources for creation snapshots {i} to {len(batch)}.")
     
     def fix_issue(self):
@@ -654,9 +670,10 @@ class MultiPAFixer(ProvenanceIssueFixer):
         logging.info(f"Found {len(result)} snapshots with multiple objects for prov:wasAttributedTo.")
         return result
 
-    def batch_delete_extra_pa(self, multi_pa_snapshots:list, batch_size=500):
+    def batch_delete_extra_pa(self, multi_pa_snapshots:List[Tuple[str]], batch_size=500):
         """
         Deletes triples where the value of prov:wasAttributedTo is <https://w3id.org/oc/meta/prov/pa/1> if there is at least another processing agent for the same snapshot subject. 
+        :param multi_pa_snapshots: A list of tuples where each tuple contains a graph URI and a snapshot URI.
         """
         template = Template("""
         PREFIX prov: <http://www.w3.org/ns/prov#>
@@ -678,8 +695,17 @@ class MultiPAFixer(ProvenanceIssueFixer):
             if self.dry_run:
                 logging.debug(f"[Dry-run] Would delete triples with default processing agent from snapshots {i} to {len(batch)}.")
             else:
-                self._query(query)
+                self._update(query)
                 logging.debug(f"Deleted triples with default processing agent from snapshots {i} to {len(batch)}.")
+    
+    def fix_issue(self):
+
+        # step 0: detect graph and snapshots that have an additional object besides the typical <https://w3id.org/oc/meta/prov/pa/1>
+        #  for prov:wasAttributedTo
+        to_fix = self.detect_issue()
+
+        # step 1: delete the extra object for prov:wasAttributedTo
+        self.batch_delete_extra_pa(to_fix)
 
 
 # (5) Correct graphs where at least one snapshots has too many objects for specific properties -> move to daughter class MultiObjectFixer
@@ -687,8 +713,25 @@ class MultiObjectFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to graphs where at least one snapshot has too many objects for specific properties in the OpenCitations Meta graph.
     """
-    def __init__(self, *args, **kwargs):
+    def __init__(self, prim_source_uri:str, pa_uri:str,  *args, **kwargs):
+        """
+        :param prim_source_uri: The URI of the primary source to be used as objects of prov:hadPrimarySource for newly created snapshots.
+        :type prim_source_uri: str
+        :param pa_uri: The URI of the processing agent to be used as objects of prov:wasAtttributedTo for newly created snapshots.
+        :type pa_uri: str
+        """
         super().__init__(*args, **kwargs)
+        self.prim_source_uri = prim_source_uri.strip()  # URI of the primary source to be used in the new creation snapshot
+        self.pa_uri = pa_uri.strip()  # URI of the processing agent to be used in the new creation snapshot
+        # naively validate URIs
+
+        orcid_pattern = r"^https:\/\/orcid.org\/\d{4}-\d{4}-\d{4}-\d{3}[0-9X]{1}$"
+        default_pa_pattern = r"^https:\/\/w3id\.org\/oc\/meta\/prov\/pa\/1$"
+        meta_figshare_pattern = r"^https:\/\/doi\.org\/10\.6084\/m9\.figshare\.\d{7}\.v\d\d?$"
+        if not re.match(orcid_pattern, self.pa_uri) and not re.match(default_pa_pattern, self.pa_uri):
+            warnings.warn(f"The processing agent URI might be invalid: {self.pa_uri}.")
+        if not re.match(meta_figshare_pattern, self.prim_source_uri):
+            warnings.warn(f"The primary source URI might be invalid: {self.prim_source_uri}.")
     
     def detect_issue(self, limit=10000) -> List[str]:
         """
@@ -738,14 +781,12 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         logging.info(f"Found {len(output)} distinct graphs containing snapshots with too many objects for some properties.")
         return output
     
-    def reset_multi_object_graphs(self, graphs:list, prim_source_uri:str, pa_uri:str):
+    def reset_multi_object_graphs(self, graphs:list):
         """
         Resets each graph in graphs by deleting the existing snapshots and creating a new 
         creation snapshot, which will be the only one left for that graph. 
 
         :param graphs: A list of distinct graph URIs that have too many objects for properties that only admit one.
-        :param prim_source_uri: The URI of the primary source to insert as object of prov:hadPrimarySource in the creation snapshot.
-        :param pa_uri: The URI of the processing agent to insert as object of prov:wasAttributedTo in the creation snapshot.
         """
 
         template = Template("""
@@ -788,8 +829,8 @@ class MultiObjectFixer(ProvenanceIssueFixer):
 
         for g in tqdm(graphs):
             creation_se = g + 'se/1'
-            prim_source = prim_source_uri  # TODO: move prim_source_uri to class init instead of this function params
-            processing_agent = pa_uri # TODO: move pa_uri to class init instead of this function params
+            prim_source = self.prim_source_uri
+            processing_agent = self.pa_uri 
             referent = get_described_res_omid(g)
             desc = f"The entity '{referent}' has been created."
 
@@ -805,6 +846,14 @@ class MultiObjectFixer(ProvenanceIssueFixer):
             if self.dry_run:
                 logging.debug(f"[Dry-run] Would reset {g} in the triplestore.")
             else:
-                self._query(query)
+                self._update(query)
                 logging.debug(f"Overwritten {g} with new creation snapshot.")
+
+    def fix_issue(self):
+        # step 0: detect graphs and snapshots with multiple objects for 1-cardinality properties
+        to_fix = self.detect_issue()
+
+        # step 1: reset graphs with a snapshot having extra objects
+        self.reset_multi_object_graphs(to_fix)
+         
     
