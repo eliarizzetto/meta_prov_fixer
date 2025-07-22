@@ -43,7 +43,7 @@ def normalise_datetime(datetime_str: str) -> str:
     microseconds) making it a UTC-aware ISO 8601 datetime string with no timestamp
     (i.e. with no microseconds specified). When converting from offset-naive to 
     offset-aware (where necessary), Italian timezone is assumed. UTC is made explicit 
-    as "+00:00" (not "Z"). If input string contains the explicit xsd datatype (^^xsd:string, 
+    as 'Z' (not '+00:00'). If input string contains the explicit xsd datatype (^^xsd:string, 
     ^^xsd:dateTime, ^^http://www.w3.org/2001/XMLSchema#dateTime, or ^^http://www.w3.org/2001/XMLSchema#string),
     the substring representing the datatype is silently removed.
     
@@ -63,10 +63,10 @@ def normalise_datetime(datetime_str: str) -> str:
     
     # Convert to UTC and strip microseconds
     dt_utc = dt.astimezone(timezone.utc).replace(microsecond=0)
-    
+
+    # return dt_utc.isoformat()   # this formats the date with "+00:00" instead of "Z"
     # # to Format with Z:
-    # return dt_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
-    return dt_utc.isoformat()
+    return dt_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 def get_provenance_graph(entity_iri: str, data_root: str) -> dict:

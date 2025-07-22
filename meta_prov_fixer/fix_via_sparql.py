@@ -14,6 +14,10 @@ from collections import defaultdict
 from datetime import date
 import warnings
 import re
+import functools
+import os
+import datetime
+import json
 
 from meta_prov_fixer.utils import get_seq_num, remove_seq_num, get_described_res_omid, get_graph_uri_from_se_uri, normalise_datetime, validate_meta_dumps_pub_dates
 
@@ -29,8 +33,75 @@ from meta_prov_fixer.utils import get_seq_num, remove_seq_num, get_described_res
 #     ('2025-02-02', 'https://doi.org/10.6084/m9.figshare.21747536.v8')
 # ]
 
+
+def log_output_to_file(enabled=False, directory="logs"):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            result = func(*args, **kwargs)
+
+            if enabled:
+                cls_name = args[0].__class__.__name__ if args else "UnknownClass"
+                func_name = func.__name__
+                timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+                os.makedirs(directory, exist_ok=True)
+
+                # Extract instance attributes safely (if exists)
+                instance_attrs = {}
+                if args:
+                    instance = args[0]
+                    try:
+                        instance_attrs = make_json_safe(vars(instance))
+                    except TypeError:
+                        instance_attrs = {}
+
+                input_data = {
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "class": cls_name,
+                    "function": func_name,
+                    "input": {
+                        "instance_attributes": instance_attrs,
+                        "args": make_json_safe(args[1:] if args else []),
+                        "kwargs": make_json_safe(kwargs),
+                    }
+                }
+
+                lines = [json.dumps(input_data, ensure_ascii=False) + '\n']
+
+                if isinstance(result, (list, tuple, set)):
+                    lines.extend(
+                        json.dumps(make_json_safe(item), ensure_ascii=False) + '\n'
+                        for item in result
+                    )
+                else:
+                    lines.append(json.dumps(make_json_safe(result), ensure_ascii=False) + '\n')
+
+                filepath = os.path.join(directory, f"{cls_name}_{func_name}_{timestamp}.jsonl")
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.writelines(lines)
+
+            return result
+        return wrapper
+    return decorator
+
+
+def make_json_safe(obj):
+    if isinstance(obj, dict):
+        return {make_json_safe(k): make_json_safe(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple, set)):
+        return [make_json_safe(item) for item in obj]
+    elif isinstance(obj, datetime.datetime):
+        return obj.isoformat()
+    elif hasattr(obj, '__dict__'):
+        return make_json_safe(vars(obj))
+    elif isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    else:
+        return str(obj)
+
+
 class ProvenanceIssueFixer:
-    def __init__(self, meta_dumps_pub_dates: List[Tuple[str, str]], sparql_endpoint: str = 'http://localhost:8890/sparql/', auth: Union[str, None] = None, dry_run: bool = False):
+    def __init__(self, sparql_endpoint: str = 'http://localhost:8890/sparql/', auth: Union[str, None] = None, dry_run: bool = False):
         self.endpoint = sparql_endpoint
         self.dry_run = dry_run
         self.sparql = SPARQLWrapper(self.endpoint)
@@ -43,8 +114,6 @@ class ProvenanceIssueFixer:
             level=logging.DEBUG,
             format="%(asctime)s - %(levelname)s - %(message)s"
         )
-        validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
-        self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
 
     def _query(self, query: str, retries: int = 3, delay: float = 2.0) -> Union[dict, None]:
         for attempt in range(retries):
@@ -122,6 +191,7 @@ class FillerFixer(ProvenanceIssueFixer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    @log_output_to_file(enabled=True)
     def detect_issue(self, limit=10000) -> List[Tuple[str, Dict[str, Set[str]]]]:
         """
         Fetches snapshots that are fillers and need to be deleted, grouped by their named graph.
@@ -185,14 +255,12 @@ class FillerFixer(ProvenanceIssueFixer):
     def batch_delete_filler_snapshots(self, deletions: List[Tuple[str, Dict[str, Set[str]]]], batch_size=500) -> None:
         """
         Deletes snapshots from the triplestore based on the provided deletions dictionary.
-        :param deletions: A dictionary where keys are graph URIs and values are dictionaries with 'to_delete' and 'remaining_snapshots' sets.
+        :param deletions: A list of tuples where the first element is a graph URI,  and the second is a dictionary with 'to_delete' and 'remaining_snapshots' sets.
         :type deletions: List[Tuple[str, Dict[str, Set[str]]]]
         """
 
         template = Template("""
-        DELETE WHERE {
             $dels
-        }
         """)
 
         logging.debug("Deleting filler snapshots in batches...")
@@ -201,17 +269,14 @@ class FillerFixer(ProvenanceIssueFixer):
             dels = []
             for g_uri, values in batch:
                 for se_to_delete in values['to_delete']:
-                    single_del = f"GRAPH <{g_uri}> {{ <{se_to_delete}> ?p ?o . }}\n"
+                    single_del = f"DELETE WHERE {{ GRAPH <{g_uri}> {{ <{se_to_delete}> ?p ?o . }}}};\n"
                     dels.append(single_del)
             dels_str = "    ".join(dels)
 
             query = template.substitute(dels=dels_str)
 
-            if self.dry_run:
-                logging.debug(f"[Dry-run] Would delete triples of filler snapshots in graphs {i} to {len(batch)}.")
-            else:
-                self._update(query)
-                logging.debug(f"Deleted triples of filler snapshots in graphs {i} to {len(batch)}.")
+            self._update(query)
+            logging.debug(f"Deleted triples of filler snapshots in graphs {i} to {len(batch)}.")
 
     @staticmethod
     def map_se_names(to_delete:set, remaining: set) -> dict:
@@ -332,9 +397,43 @@ class FillerFixer(ProvenanceIssueFixer):
           }
         }
         """)
+        # template = Template("""
+        # DELETE {
+        #     GRAPH ?g {
+        #         <$old_uri> ?p ?o .
+        #     }
+        # }
+        # INSERT {
+        #     GRAPH ?g {
+        #         <$new_uri> ?p ?o .
+        #     }
+        # }
+        # WHERE {
+        #     GRAPH ?g {
+        #         <$old_uri> ?p ?o .
+        #     }
+        # };
+        # DELETE {
+        #     GRAPH ?g1 {
+        #         ?s ?p1 <$old_uri> .
+        #     }
+        # }
+        # INSERT {
+        #     GRAPH ?g1 {
+        #         ?s ?p1 <$new_uri> .
+        #     }
+        # }
+        # WHERE {
+        #     GRAPH ?g1 {
+        #         ?s ?p1 <$old_uri> .
+        #     }
+        # }
+        # """)
 
         logging.debug("Renaming snapshots in the triplestore...")
         for old_uri, new_uri in mapping.items():
+            if old_uri == new_uri:
+                continue
             query = template.substitute(old_uri=old_uri, new_uri=new_uri)
             self._update(query)
         logging.debug(f"Snapshot entities were re-named in all named graphs according to the following mapping: {mapping}.")
@@ -377,11 +476,9 @@ class FillerFixer(ProvenanceIssueFixer):
                 snapshot=s,
                 following_snapshot=following_se
             )
-            if self.dry_run:
-                logging.debug(f"[Dry-run] Would replace the value of invalidatedAtTime for {s} with the value of generatedAtTime for {following_se} in graph {graph_uri}.")
-            else:
-                self._update(query)
-                logging.debug(f"Replaced the value of invalidatedAtTime for {s} with the value of generatedAtTime for {following_se} in graph {graph_uri}.")
+
+            self._update(query)
+            logging.debug(f"Replaced the value of invalidatedAtTime for {s} with the value of generatedAtTime for {following_se} in graph {graph_uri}.")
 
     def fix_issue(self):
 
@@ -412,6 +509,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
     
+    @log_output_to_file(enabled=True)
     def detect_issue(self, limit=1000000) -> List[Tuple[str]]:
         """
         Fetches all quads where the datetime object value is not syntactically correct or complete, including cases where
@@ -465,7 +563,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
         template = Template('''
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
-        DELETE WHERE {
+        DELETE DATA {
           $to_delete
         } ;
         INSERT DATA {
@@ -479,18 +577,16 @@ class DateTimeFixer(ProvenanceIssueFixer):
             to_insert = []
             for g, s, p, dt in batch:
                 
-                to_delete.append(f"GRAPH <{g}> {{ <{s}> <{p}> ?ill_dt . }}\n")
+                to_delete.append(f'GRAPH <{g}> {{ <{s}> <{p}> "{dt}"^^xsd:dateTime . }}\n')  # TODO: adatta per delete data ma assicurati di togliere il datatype 
                 correct_dt = normalise_datetime(dt)
                 to_insert.append(f'GRAPH <{g}> {{ <{s}> <{p}> "{correct_dt}"^^xsd:dateTime . }}\n')
             
             to_delete_str = "  ".join(to_delete)
             to_insert_str = "  ".join(to_insert)
             query = template.substitute(to_delete=to_delete_str, to_insert=to_insert_str)
-            if self.dry_run:
-                logging.debug(f"[Dry-run] Would fix datetime values for quads {i} to {len(batch)}.")
-            else:
-                self._update(query)
-                logging.debug(f"Fixed datetime values for quads {i} to {len(batch)}.")
+
+            self._update(query)
+            logging.debug(f"Fixed datetime values for quads {i} to {len(batch)}.")
 
     def fix_issue(self):
 
@@ -505,8 +601,10 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to creation snapshots that do not have a primary source in the OpenCitations Meta graph.
     """
-    def __init__(self, *args, **kwargs):
+    def __init__(self, meta_dumps_pub_dates: List[Tuple[str, str]], *args, **kwargs):
         super().__init__(*args, **kwargs)
+        validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
+        self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
     
     def get_previous_meta_dump_uri(self, dt:str)-> str:
         """
@@ -527,6 +625,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
         #     ('2024-06-17', 'https://doi.org/10.6084/m9.figshare.21747536.v7'),
         #     ('2025-02-02', 'https://doi.org/10.6084/m9.figshare.21747536.v8')
         # ]
+
         # meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
         d = date.fromisoformat(dt.strip()[:10])
         res = None
@@ -542,7 +641,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
             warnings.warn(f'[get_previous_meta_dump_uri]: {dt} follows the publication date of the latest Meta dump. The register of published dumps might need to be updated!') 
             return self.meta_dumps_pub_dates[-1][1] # picks latest dump in the register
     
-
+    @log_output_to_file(enabled=True)
     def detect_issue(self, limit=1000000) -> List[Tuple[str, str]]:
         """
         Fetches creation snapshots that do not have a primary source.
@@ -581,7 +680,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
                 results.append((s, gen_time))
         
         logging.info(f"Found {len(results)} creation snapshots without a primary source.")
-        return results # (<snapshot uri>, <oldest gen. dt in graph>)
+        return results # (<snapshot uri>, <gen. time>)
     
     def batch_insert_missing_primsource(self, creations_to_fix: List[Tuple[str, str]], batch_size=500):
         """
@@ -608,11 +707,9 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
                 quads.append(f"GRAPH <{graph_uri}> {{ <{snapshot_uri}> prov:hadPrimarySource <{prim_source_uri}> . }}\n")
             quads_str = "    ".join(quads)
             query = template.substitute(quads=quads_str)
-            if self.dry_run:
-                logging.debug(f"[Dry-run] Would insert primary sources for creation snapshots {i} to {len(batch)}.")
-            else:
-                self._update(query)
-                logging.debug(f"Inserted primary sources for creation snapshots {i} to {len(batch)}.")
+
+            self._update(query)
+            logging.debug(f"Inserted primary sources for creation snapshots {i} to {len(batch)}.")
     
     def fix_issue(self):
         
@@ -620,7 +717,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
         to_fix = self.detect_issue()
 
         # step 1: insert primary source for the snapshots
-        self.batch_insert_missing_primsource()
+        self.batch_insert_missing_primsource(to_fix)
                 
 
 # TODO: (4) Correct snapshots with multiple objects for prov:wasAttributedTo -> move in daughter class MultiPAFixer
@@ -631,6 +728,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    @log_output_to_file(enabled=True)
     def detect_issue(self, limit=10000):
         """
         Fetches graph-snapshot pairs where the snapshot has more than one object for the ``prov:wasAttributedTo`` property.
@@ -692,11 +790,9 @@ class MultiPAFixer(ProvenanceIssueFixer):
 
             to_delete_str = "  ".join(to_delete)
             query = template.substitute(quads_to_delete=to_delete_str)
-            if self.dry_run:
-                logging.debug(f"[Dry-run] Would delete triples with default processing agent from snapshots {i} to {len(batch)}.")
-            else:
-                self._update(query)
-                logging.debug(f"Deleted triples with default processing agent from snapshots {i} to {len(batch)}.")
+
+            self._update(query)
+            logging.debug(f"Deleted triples with default processing agent from snapshots {i} to {len(batch)}.")
     
     def fix_issue(self):
 
@@ -733,6 +829,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         if not re.match(meta_figshare_pattern, self.prim_source_uri):
             warnings.warn(f"The primary source URI might be invalid: {self.prim_source_uri}.")
     
+    @log_output_to_file(enabled=True)
     def detect_issue(self, limit=10000) -> List[str]:
         """
         Fetches graphs containing at least one snapshot with multiple objects for 
@@ -788,7 +885,48 @@ class MultiObjectFixer(ProvenanceIssueFixer):
 
         :param graphs: A list of distinct graph URIs that have too many objects for properties that only admit one.
         """
+        # #  The following always uses the most ancient generation datetime 
+        # #  (regardless of whether it's the datetime of snapshot 1)
+        # #  for creating a new creation snapshot. 
+        # template = Template("""
+        # PREFIX prov: <http://www.w3.org/ns/prov#>
+        # PREFIX dcterms: <http://purl.org/dc/terms/>
+        # PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        # PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
+        # #WITH GRAPH <$graph> # WITH clause seems not to be supported in rdflib
+        # DELETE {
+        #   GRAPH <$graph> {
+        #     ?s ?p ?o
+        #   }
+        # }
+        # INSERT {
+        #   GRAPH <$graph> {
+        #     <$creation_snapshot> prov:hadPrimarySource <$primary_source> ;
+        #       prov:wasAttributedTo <$processing_agent> ;
+        #       prov:specializationOf <$specialization_of> ;
+        #       dcterms:description "$description" ;
+        #       rdf:type prov:Entity ;
+        #       prov:generatedAtTime ?minGenTime .
+        #   }
+        # }
+        # WHERE {
+        #   {
+        #     SELECT (MIN(?genTime) AS ?minGenTime) WHERE {
+        #       GRAPH <$graph> {
+        #         ?_s prov:generatedAtTime ?genTime .
+        #       }
+        #     }
+        #   }
+        #   GRAPH <$graph> {
+        #     ?s ?p ?o .
+        #   }
+        # }
+        # """)
+
+        # #  The following always uses the generation datetime of snapshot 1
+        # #  (regardless of whether it's the most ancient datetime in the graph)
+        # #  for creating a new creation snapshot.
         template = Template("""
         PREFIX prov: <http://www.w3.org/ns/prov#>
         PREFIX dcterms: <http://purl.org/dc/terms/>
@@ -806,16 +944,17 @@ class MultiObjectFixer(ProvenanceIssueFixer):
             <$creation_snapshot> prov:hadPrimarySource <$primary_source> ;
               prov:wasAttributedTo <$processing_agent> ;
               prov:specializationOf <$specialization_of> ;
-              dcterms:description "$description"^^xsd:string ;
+              dcterms:description "$description" ;
               rdf:type prov:Entity ;
-              prov:generatedAtTime ?minGenTime .
+              prov:generatedAtTime ?genTime .
           }
         }
         WHERE {
           {
-            SELECT (MIN(?genTime) AS ?minGenTime) WHERE {
+            SELECT ?genTime WHERE {
               GRAPH <$graph> {
                 ?_s prov:generatedAtTime ?genTime .
+                FILTER(strends(str(?_s), "/se/1"))
               }
             }
           }
@@ -827,7 +966,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
 
         logging.debug("Resetting graphs with too many objects by creating a new single creation snapshot...")
 
-        for g in tqdm(graphs):
+        for g in tqdm(graphs, desc='Overwriting graphs with too many objects for certain properties...'):
             creation_se = g + 'se/1'
             prim_source = self.prim_source_uri
             processing_agent = self.pa_uri 
@@ -843,11 +982,9 @@ class MultiObjectFixer(ProvenanceIssueFixer):
                 description = desc
             )
             
-            if self.dry_run:
-                logging.debug(f"[Dry-run] Would reset {g} in the triplestore.")
-            else:
-                self._update(query)
-                logging.debug(f"Overwritten {g} with new creation snapshot.")
+
+            self._update(query)
+            logging.debug(f"Overwritten {g} with new creation snapshot.")
 
     def fix_issue(self):
         # step 0: detect graphs and snapshots with multiple objects for 1-cardinality properties
@@ -855,5 +992,76 @@ class MultiObjectFixer(ProvenanceIssueFixer):
 
         # step 1: reset graphs with a snapshot having extra objects
         self.reset_multi_object_graphs(to_fix)
-         
+
+def fix_process(
+        meta_dumps_pub_dates: List[Tuple[str, str]],
+        primsource_uri:str, 
+        pa_uri:str,
+        sparql_endpoint: str,
+        auth: Union[str, None] = None,
+        dry_run: bool = False
+    ):
+    """
+    Function wrapping all the single fix operations into a single process, with strictly ordered steps.
+    """
+    
+    # (1) Fix filler snapshots
+    ff = FillerFixer(
+        sparql_endpoint=sparql_endpoint,
+        auth=auth,
+    )
+    ff.detect_issue()
+    if not dry_run:
+        ff.fix_issue()
+    else:
+        logging.debug("[fix_process]: Would delete filler snapshots and update related graphs.")
+
+    # (2) Fix DateTime values: DateTimeFixer
+    dtf = DateTimeFixer(
+        sparql_endpoint=sparql_endpoint,
+        auth=auth,
+    )
+    dtf.detect_issue()
+    if not dry_run:
+        dtf.fix_issue()
+    else: 
+        logging.debug("[fix_process]: Would update invalid datetime values.")
+
+    # (3) Fix creation snapshots without primary source
+    mpsf = MissingPrimSourceFixer(
+        meta_dumps_pub_dates=meta_dumps_pub_dates,
+        sparql_endpoint=sparql_endpoint,
+        auth=auth,
+    )
+    mpsf.detect_issue()
+    if not dry_run:
+        mpsf.fix_issue()
+    else:
+        logging.debug("[fix_process]: Would insert a primary source for snapshots lacking a value for this ")
+
+    # (4) Fix snapshots with multiple objects for prov:wasAttributedTo
+    mpaf = MultiPAFixer(
+        sparql_endpoint=sparql_endpoint,
+        auth=auth,
+    )
+    mpaf.detect_issue()
+    if not dry_run:
+        mpaf.fix_issue()
+    else:
+        logging.debug("[fix_process]: Would remove extra values for prov:wasAttributedTo.")
+
+    # (5) Fix graphs with too many objects for specific properties
+    mof = MultiObjectFixer(
+        prim_source_uri=primsource_uri,
+        pa_uri=pa_uri,
+        sparql_endpoint=sparql_endpoint,
+        auth=auth,
+    )
+    mof.detect_issue()
+    if not dry_run:
+        mof.fix_issue()
+    else:
+        logging.debug("[fix_process]: Would delete filler snapshots")
+
+      
     
