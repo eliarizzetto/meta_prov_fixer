@@ -48,8 +48,8 @@ def rdflib_update(dataset:Dataset, query: str) -> None:
 
 
 
-TEST_DATA_FP = 'local/data.trig'
-CORRECTED_DATA_FP = 'local/corrected_data.trig'
+TEST_DATA_FP = 'tests/data/data.trig'
+CORRECTED_DATA_FP = 'tests/data/corrected_data.trig'
 
 
 
@@ -59,7 +59,6 @@ class TestFillerFixer(unittest.TestCase):
         self.fixer = FillerFixer(
             sparql_endpoint="http://localhost:8890/sparql/",
             auth=None,
-            dry_run=False
         )
         self.local_dataset = Dataset(default_union=True)
         self.local_dataset.parse(TEST_DATA_FP, format='trig')
@@ -196,7 +195,6 @@ class TestDateTimeFixer(unittest.TestCase):
         self.fixer = DateTimeFixer(
             sparql_endpoint="http://localhost:8890/sparql/",
             auth=None,
-            dry_run=False
         )
         self.local_dataset = Dataset(default_union=True)
         self.local_dataset.parse(TEST_DATA_FP, format='trig')
@@ -266,7 +264,6 @@ class TestMissingPrimSourceFixer(unittest.TestCase):
             meta_dumps_pub_dates=meta_dumps_pub_dates,
             sparql_endpoint="http://localhost:8890/sparql/",
             auth=None,
-            dry_run=False
         )
         self.local_dataset = Dataset(default_union=True)
         self.local_dataset.parse(TEST_DATA_FP, format='trig')
@@ -334,7 +331,6 @@ class TestMultiPAFixer(unittest.TestCase):
         self.fixer = MultiPAFixer(
             sparql_endpoint="http://localhost:8890/sparql/",
             auth=None,
-            dry_run=False
         )
         self.local_dataset = Dataset(default_union=True)
         self.local_dataset.parse(TEST_DATA_FP, format='trig')
@@ -401,11 +397,9 @@ class TestMultiObjectFixer(unittest.TestCase):
     
     def setUp(self):
         self.fixer = MultiObjectFixer(
-            prim_source_uri='https://doi.org/10.5281/zenodo.15855112',
-            pa_uri='https://w3id.org/oc/meta/prov/pa/1',
+            meta_dumps_pub_dates=meta_dumps_pub_dates,
             sparql_endpoint="http://localhost:8890/sparql/",
             auth=None,
-            dry_run=False
         )
         self.local_dataset = Dataset(default_union=True)
         self.local_dataset.parse(TEST_DATA_FP, format='trig')
@@ -428,19 +422,17 @@ class TestMultiObjectFixer(unittest.TestCase):
 
         mock_query.side_effect = self.local_query
         expected = [
-            "https://w3id.org/oc/meta/br/06104437954/prov/",
-            "https://w3id.org/oc/meta/br/06104437957/prov/",
-            "https://w3id.org/oc/meta/br/0610476324/prov/"
+            ("https://w3id.org/oc/meta/br/06104437954/prov/", '2023-12-13T13:56:16.718737+00:00'),
+            ("https://w3id.org/oc/meta/br/06104437957/prov/", '2023-12-13T13:56:16.721920+00:00'),
+            ("https://w3id.org/oc/meta/br/0610476324/prov/", '2023-12-13T14:56:31.016170')
         ]
         mocked_res = self.fixer.detect_issue()
 
         # Assertions based on expected behavior/output
         self.assertIsInstance(mocked_res, list)
         self.assertEqual(len(mocked_res), 3)
-        self.assertTrue(all(isinstance(item, str) for item in mocked_res))
+        self.assertTrue(all(isinstance(item, tuple) for item in mocked_res))
         self.assertEqual(set(mocked_res), set(expected))
-    
-
 
 
     @patch.object(ProvenanceIssueFixer, '_update')
@@ -518,8 +510,6 @@ class TestFixProcess(unittest.TestCase):
 
         fix_process(
             meta_dumps_pub_dates=self.meta_dumps_pub_dates,
-            primsource_uri=self.prim_source_uri,
-            pa_uri=self.pa_uri,
             sparql_endpoint=self.sparql_endpoint,
             auth=self.auth,
             dry_run=self.dry_run,
@@ -540,8 +530,9 @@ class TestFixProcess(unittest.TestCase):
 
 
 
-
-
-
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
     unittest.main()

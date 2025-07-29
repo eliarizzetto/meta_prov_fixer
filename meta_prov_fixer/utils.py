@@ -8,34 +8,84 @@ import time
 import zipfile
 import lzma
 from typing import Generator, List, Literal, Union, Tuple
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 from zoneinfo import ZoneInfo
-from datetime import datetime
 from urllib.parse import urlparse
 import warnings
+import functools
 
 
-# def normalise_datetime(datetime_str: str) -> str:
-#     """
-#     Normalises a datetime string (offset naive or aware, with or without 
-#     microseconds) making it a UTC-aware ISO 8601 datetime string with no timestamp
-#     (i.e. with no microseconds specified). When converting from offset-naive to 
-#     offset-aware (where necessary), Italian timezone is assumed.
-    
-#     param datetime_str (str): Datetime string, possibly as a timestamp.
-#     return: UTC-aware ISO 8601 string without microseconds.
-#     """
-#     datetime_str = str(datetime_str).replace('Z', '+00:00')
-#     dt = datetime.fromisoformat(datetime_str)
-    
-#     # If naive, assume Europe/Rome
-#     if dt.tzinfo is None:
-#         dt = dt.replace(tzinfo=ZoneInfo("Europe/Rome"))
+def log_output_to_file(directory="prov_fix_logs", enabled=False):
+    """
+    Decorator used to store the output of the methods detecting the errors into files. 
+    The output is transformed into JSON (with the least possible changes to the original data structures). 
+    Files are saved inside the 'prov_fix_logs' directory.
+    """
+    def decorator(func):
+        def make_json_safe(obj):
+            if isinstance(obj, dict):
+                return {make_json_safe(k): make_json_safe(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple, set)):
+                return [make_json_safe(item) for item in obj]
+            elif isinstance(obj, datetime):
+                return obj.isoformat()
+            elif hasattr(obj, '__dict__'):
+                return make_json_safe(vars(obj))
+            elif isinstance(obj, (str, int, float, bool)) or obj is None:
+                return obj
+            else:
+                return str(obj)
+            
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            # overwrite 'enabled' with self.log_results if it is specified for the instance
+            enabled = getattr(args[0], "log_results", False) if args else enabled 
+            result = func(*args, **kwargs)
 
-#     dt_utc = dt.astimezone(timezone.utc) # convert to UTC
-#     dt_utc = dt_utc.replace(microsecond=0) # remove microseconds
-    
-#     return dt_utc.isoformat()
+            if enabled:
+                cls_name = args[0].__class__.__name__ if args else "UnknownClass"
+                func_name = func.__name__
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                os.makedirs(directory, exist_ok=True)
+
+                # Extract instance attributes safely (if exists)
+                instance_attrs = {}
+                if args:
+                    instance = args[0]
+                    try:
+                        instance_attrs = make_json_safe(vars(instance))
+                    except TypeError:
+                        instance_attrs = {}
+
+                input_data = {
+                    "timestamp": datetime.now().isoformat(),
+                    "class": cls_name,
+                    "function": func_name,
+                    "input": {
+                        "instance_attributes": instance_attrs,
+                        "args": make_json_safe(args[1:] if args else []),
+                        "kwargs": make_json_safe(kwargs),
+                    }
+                }
+
+                lines = [json.dumps(input_data, ensure_ascii=False) + '\n']
+
+                if isinstance(result, (list, tuple, set)):
+                    lines.extend(
+                        json.dumps(make_json_safe(item), ensure_ascii=False) + '\n'
+                        for item in result
+                    )
+                else:
+                    lines.append(json.dumps(make_json_safe(result), ensure_ascii=False) + '\n')
+
+                filepath = os.path.join(directory, f"{cls_name}_{func_name}_{timestamp}.jsonl")
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.writelines(lines)
+
+            return result
+        return wrapper
+    return decorator
+
 
 def normalise_datetime(datetime_str: str) -> str:
     """
@@ -233,6 +283,42 @@ def get_graph_uri_from_se_uri(se_uri:str) -> str:
     param se_uri: the URI of the snapshot entity. 
     """
     return se_uri.split('se/', 1)[0]
+
+def get_previous_meta_dump_uri(meta_dumps_pub_dates, dt:str)-> str:
+    """
+    Returns the DOI of the OpenCitations Meta dump that was published before the given date.
+    :param dt: A date string in ISO format (YYYY-MM-DD).
+    :type dt: str
+    :return: The DOI of the previous Meta dump.
+    :rtype: str
+    """
+    ## Example of meta_dumps_pub_dates register:
+    # meta_dumps_pub_dates = [ 
+    #     ('2022-12-19', 'https://doi.org/10.6084/m9.figshare.21747536.v1'),
+    #     ('2022-12-20', 'https://doi.org/10.6084/m9.figshare.21747536.v2'),
+    #     ('2023-02-15', 'https://doi.org/10.6084/m9.figshare.21747536.v3'),
+    #     ('2023-06-28', 'https://doi.org/10.6084/m9.figshare.21747536.v4'),
+    #     ('2023-10-26', 'https://doi.org/10.6084/m9.figshare.21747536.v5'),
+    #     ('2024-04-06', 'https://doi.org/10.6084/m9.figshare.21747536.v6'),
+    #     ('2024-06-17', 'https://doi.org/10.6084/m9.figshare.21747536.v7'),
+    #     ('2025-02-02', 'https://doi.org/10.6084/m9.figshare.21747536.v8')
+    # ]
+
+    # meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
+    d = date.fromisoformat(dt.strip()[:10])
+    res = None
+    for idx, t in enumerate(meta_dumps_pub_dates):
+        if d <= t[0]:
+            pos = idx-1 if ((idx-1) >= 0) else 0 # if dt predates the publication date of the absolute first Meta dump, assign the first Meta dump
+            prim_source = meta_dumps_pub_dates[pos][1]
+            res = prim_source
+            break
+    if res:
+        return res
+    else:
+        warnings.warn(f'[get_previous_meta_dump_uri]: {dt} follows the publication date of the latest Meta dump. The register of published dumps might need to be updated!') 
+        return meta_dumps_pub_dates[-1][1] # picks latest dump in the register
+
 
 def validate_meta_dumps_pub_dates(meta_dumps_register:List[Tuple[str, str]]):
     """

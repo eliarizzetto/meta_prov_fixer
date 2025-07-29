@@ -1,0 +1,122 @@
+@prefix rdf:	<http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix prov:	<http://www.w3.org/ns/prov#> .
+@prefix dcterms:	<http://purl.org/dc/terms/> .
+@prefix xsd:	<http://www.w3.org/2001/XMLSchema#> .
+@prefix ns4:	<https://w3id.org/oc/ontology/> .
+
+<https://w3id.org/oc/meta/br/06104437954/prov/> = {
+<https://w3id.org/oc/meta/br/06104437954/prov/se/1>	rdf:type	prov:Entity ; # creation se with 2 prim. sources and gen. datetime with microseconds
+    prov:specializationOf	<https://w3id.org/oc/meta/br/06104437954> ;
+    dcterms:description	"The entity 'https://w3id.org/oc/meta/br/06104437954' has been created." ;
+    prov:generatedAtTime	"2023-12-13T13:56:16Z"^^xsd:dateTime ;
+    prov:hadPrimarySource	<https://doi.org/10.6084/m9.figshare.21747536.v5> ;
+    prov:wasAttributedTo	<https://w3id.org/oc/meta/prov/pa/1> .
+}
+
+<https://w3id.org/oc/meta/br/06104437957/prov/> = { 
+<https://w3id.org/oc/meta/br/06104437957/prov/se/1>	rdf:type	prov:Entity ; #creation se with 2 prim. sources and gen. datetime with microseconds
+	prov:specializationOf	<https://w3id.org/oc/meta/br/06104437957> ;
+	dcterms:description	"The entity 'https://w3id.org/oc/meta/br/06104437957' has been created." ;
+	prov:generatedAtTime	"2023-12-13T13:56:16Z"^^xsd:dateTime ;
+	prov:hadPrimarySource	<https://doi.org/10.6084/m9.figshare.21747536.v5> ;
+	prov:wasAttributedTo	<https://w3id.org/oc/meta/prov/pa/1> .
+}
+
+<https://w3id.org/oc/meta/br/0610476324/prov/> = { # graph contains snapshots with extra objects -> reset to creation
+<https://w3id.org/oc/meta/br/0610476324/prov/se/1>	rdf:type	prov:Entity ; # creation se with offset-naive gen. datetime and missing prim. source
+	prov:specializationOf	<https://w3id.org/oc/meta/br/0610476324> ;
+	dcterms:description	"The entity 'https://w3id.org/oc/meta/br/0610476324' has been created." ;
+	prov:generatedAtTime	"2023-12-13T13:56:31Z"^^xsd:dateTime ;
+    prov:hadPrimarySource	<https://doi.org/10.6084/m9.figshare.21747536.v5> ;
+	prov:wasAttributedTo	<https://w3id.org/oc/meta/prov/pa/1> .
+}
+
+<https://w3id.org/oc/meta/br/06104278913/prov/> = {
+<https://w3id.org/oc/meta/br/06104278913/prov/se/1>	rdf:type	prov:Entity ; # creation se lacking prim source, with 2 wasAttributedTo and gen. datetime with microseconds
+	prov:specializationOf	<https://w3id.org/oc/meta/br/06104278913> ;
+	dcterms:description	"The entity 'https://w3id.org/oc/meta/br/06104278913' has been created." ;
+	prov:generatedAtTime	"2023-12-13T13:56:02Z"^^xsd:dateTime ;
+    prov:hadPrimarySource	<https://doi.org/10.6084/m9.figshare.21747536.v5> ;
+	prov:invalidatedAtTime	"2024-01-19T14:58:09Z"^^xsd:dateTime ;
+	prov:wasAttributedTo	<https://w3id.org/oc/meta/prov/pa/2> .
+<https://w3id.org/oc/meta/br/06104278913/prov/se/2>	rdf:type	prov:Entity ; # this is ok
+	prov:specializationOf	<https://w3id.org/oc/meta/br/06104278913> ;
+	dcterms:description	"The entity 'https://w3id.org/oc/meta/br/06104278913' has been modified." ;
+	prov:generatedAtTime	"2024-01-19T14:58:09Z"^^xsd:dateTime ;
+	prov:wasAttributedTo	<https://w3id.org/oc/meta/prov/pa/1> ;
+	prov:wasDerivedFrom	<https://w3id.org/oc/meta/br/06104278913/prov/se/1> ;
+	ns4:hasUpdateQuery	"DELETE DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06104278913> <http://prismstandard.org/namespaces/basic/2.0/publicationDate> \"2010-08-24\" .<https://w3id.org/oc/meta/br/06104278913> <http://purl.org/dc/terms/title> \"Initiating Patients On Antiretroviral Therapy At CD4 Cell Counts Above 200 Cells/\u039Cl Is Associated With Improved Treatment Outcomes In South Africa\" . } }; INSERT DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06104278913> <http://prismstandard.org/namespaces/basic/2.0/publicationDate> \"2010-08-24\"^^<http://www.w3.org/2001/XMLSchema#date> .<https://w3id.org/oc/meta/br/06104278913> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/0617011957842> .<https://w3id.org/oc/meta/br/06104278913> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/061702767608> .<https://w3id.org/oc/meta/br/06104278913> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/0617011957841> .<https://w3id.org/oc/meta/br/06104278913> <http://purl.org/vocab/frbr/core#embodiment> <https://w3id.org/oc/meta/re/061702236961> .<https://w3id.org/oc/meta/br/06104278913> <http://purl.org/dc/terms/title> \"Early Commencement Of Antiretroviral Therapy In HIV Patients From Resource-Limited Countries May Prevent The Hazards Of Severe Immunodeficiency\" . } }" .
+}
+
+<https://w3id.org/oc/meta/br/06103051181/prov/> = {
+<https://w3id.org/oc/meta/br/06103051181/prov/se/1>	rdf:type	prov:Entity ; # creation se lacing prim. source; gen. datetime with microseconds and timezone-naive
+	prov:specializationOf	<https://w3id.org/oc/meta/br/06103051181> ;
+	dcterms:description	"The entity 'https://w3id.org/oc/meta/br/06103051181' has been created." ;
+	prov:generatedAtTime	"2023-12-13T13:56:02Z"^^xsd:dateTime ;
+    prov:hadPrimarySource	<https://doi.org/10.6084/m9.figshare.21747536.v5> ;
+	prov:invalidatedAtTime	"2024-03-27T17:16:04Z"^^xsd:dateTime ;
+	prov:wasAttributedTo	<https://w3id.org/oc/meta/prov/pa/1> .
+<https://w3id.org/oc/meta/br/06103051181/prov/se/2>	rdf:type	prov:Entity ; # this is ok
+	prov:specializationOf	<https://w3id.org/oc/meta/br/06103051181> ;
+	dcterms:description	"The entity 'https://w3id.org/oc/meta/br/06103051181' has been modified." ;
+	prov:generatedAtTime	"2024-03-27T17:16:04Z"^^xsd:dateTime ;
+	prov:hadPrimarySource	<https://openalex.s3.amazonaws.com/browse.html> ;
+	prov:wasAttributedTo	<https://w3id.org/oc/meta/prov/pa/1> ;
+	prov:wasDerivedFrom	<https://w3id.org/oc/meta/br/06103051181/prov/se/1> ;
+	ns4:hasUpdateQuery	"INSERT DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06103051181> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/06510478257> . } }" .
+}
+
+<https://w3id.org/oc/meta/br/06101188873/prov/> = { # this whole (synthetic) graph is ok (nothing should be changed here)! Anche se è molto strano che un'entità risulti creata da OpenAlex
+<https://w3id.org/oc/meta/br/06101188873/prov/se/1>	rdf:type	prov:Entity ;
+	prov:specializationOf	<https://w3id.org/oc/meta/br/06101188873> ;
+	dcterms:description	"The entity 'https://w3id.org/oc/meta/br/06101188873' has been created." ;
+	prov:generatedAtTime	"2023-12-13T13:56:05Z"^^xsd:dateTime ;
+	prov:hadPrimarySource	<https://openalex.s3.amazonaws.com/browse.html> ;
+	prov:wasAttributedTo	<https://w3id.org/oc/meta/prov/pa/1> .
+}
+
+<https://w3id.org/oc/meta/br/06101234191/prov/> = {
+<https://w3id.org/oc/meta/br/06101234191/prov/se/1>	rdf:type	prov:Entity ; # creation se lacking prim. source; gen. datetime and invalid. datetime with microseconds and/or timezone naive
+	prov:specializationOf	<https://w3id.org/oc/meta/br/06101234191> ;
+	dcterms:description	"The entity 'https://w3id.org/oc/meta/br/06101234191' has been created." ;
+	prov:generatedAtTime	"2023-12-13T13:56:09Z"^^xsd:dateTime ;
+    prov:hadPrimarySource	<https://doi.org/10.6084/m9.figshare.21747536.v5> ;
+	prov:invalidatedAtTime	"2024-01-01T18:53:45Z"^^xsd:dateTime ;
+	prov:wasAttributedTo	<https://w3id.org/oc/meta/prov/pa/1> .
+<https://w3id.org/oc/meta/br/06101234191/prov/se/2>	rdf:type	prov:Entity ; # this is fine but needs to be adapted after deletion of fillers!
+	prov:specializationOf	<https://w3id.org/oc/meta/br/06101234191> ;
+	dcterms:description	"The entity 'https://w3id.org/oc/meta/br/06101234191' has been modified." ;
+	prov:generatedAtTime	"2024-01-01T18:53:45Z"^^xsd:dateTime ;
+	prov:invalidatedAtTime	"2024-12-06T01:38:20Z"^^xsd:dateTime ;  # questo forse da ricontrollare
+	prov:wasAttributedTo	<https://w3id.org/oc/meta/prov/pa/1> ;
+	prov:wasDerivedFrom	<https://w3id.org/oc/meta/br/06101234191/prov/se/1> ;
+	ns4:hasUpdateQuery	"DELETE DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06101234191> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/06101266921> . } }; INSERT DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06101234191> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/062203406464> . } }" .
+<https://w3id.org/oc/meta/br/06101234191/prov/se/3>	rdf:type	prov:Entity ; # this is fine but needs to be adapted after deletion of fillers!
+	prov:specializationOf	<https://w3id.org/oc/meta/br/06101234191> ;
+	dcterms:description	"The entity 'https://w3id.org/oc/meta/br/06101234191' has been merged with 'https://w3id.org/oc/meta/br/062203612593'." ;
+	prov:generatedAtTime	"2024-12-06T01:38:20Z"^^xsd:dateTime ;
+	prov:wasAttributedTo	<https://orcid.org/0000-0002-8420-0696> ;
+	prov:wasDerivedFrom	<https://w3id.org/oc/meta/br/06101234191/prov/se/2> ,
+		<https://w3id.org/oc/meta/br/062203612593/prov/se/1> ;
+	ns4:hasUpdateQuery	"DELETE DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06101234191> <http://prismstandard.org/namespaces/basic/2.0/publicationDate> \"1985-06\" .<https://w3id.org/oc/meta/br/06101234191> <http://purl.org/dc/terms/title> \"Diagnostic And Gender Differences In The Expressed Fears Of Anxious Patients\" .<https://w3id.org/oc/meta/br/06101234191> <http://purl.org/vocab/frbr/core#partOf> <https://w3id.org/oc/meta/br/0618028810> . } }; INSERT DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06101234191> <http://purl.org/dc/terms/title> \"Diagnostic And Gender Differences In The Expressed Fears Of Anxious Patients.\"^^<http://www.w3.org/2001/XMLSchema#string> .<https://w3id.org/oc/meta/br/06101234191> <http://purl.org/vocab/frbr/core#partOf> <https://w3id.org/oc/meta/br/0618029920> .<https://w3id.org/oc/meta/br/06101234191> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/062203406463> .<https://w3id.org/oc/meta/br/06101234191> <http://prismstandard.org/namespaces/basic/2.0/publicationDate> \"1985\"^^<http://www.w3.org/2001/XMLSchema#gYear> . } }" .
+}
+
+<https://w3id.org/oc/meta/br/0610491907/prov/> = {
+<https://w3id.org/oc/meta/br/0610491907/prov/se/1>	rdf:type	prov:Entity ; # creation se missing prim. source; gen. dt with microseconds and timezone-naive; inval. dt with microseconds
+	prov:specializationOf	<https://w3id.org/oc/meta/br/0610491907> ;
+	dcterms:description	"The entity 'https://w3id.org/oc/meta/br/0610491907' has been created." ;
+	prov:generatedAtTime	"2023-12-13T13:56:13Z"^^xsd:dateTime ;
+    prov:hadPrimarySource	<https://doi.org/10.6084/m9.figshare.21747536.v5> ;
+	prov:invalidatedAtTime	"2024-01-19T13:37:12Z"^^xsd:dateTime ;
+	prov:wasAttributedTo	<https://w3id.org/oc/meta/prov/pa/1> .
+<https://w3id.org/oc/meta/br/0610491907/prov/se/2>	rdf:type	prov:Entity ;
+	prov:specializationOf	<https://w3id.org/oc/meta/br/0610491907> ;
+	dcterms:description	"The entity 'https://w3id.org/oc/meta/br/0610491907' has been deleted." ;
+	prov:generatedAtTime	"2024-01-19T13:37:12Z"^^xsd:dateTime ;
+	prov:invalidatedAtTime	"2024-01-19T13:37:12Z"^^xsd:dateTime ; 
+	prov:wasAttributedTo	<https://w3id.org/oc/meta/prov/pa/1> ;
+	prov:wasDerivedFrom	<https://w3id.org/oc/meta/br/0610491907/prov/se/1> ;
+	ns4:hasUpdateQuery	"DELETE DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/06403981806> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891817> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891807> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891821> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/vocab/frbr/core#partOf> <https://w3id.org/oc/meta/br/0619014835> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891820> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891808> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/0610548108> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/dc/terms/title> \"Measurement And Laser Control Of Attosecond Charge Migration In Ionized Iodoacetylene\" .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/vocab/frbr/core#embodiment> <https://w3id.org/oc/meta/re/0610335917> .<https://w3id.org/oc/meta/br/0610491907> <http://prismstandard.org/namespaces/basic/2.0/publicationDate> \"2015-11-13\" .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891811> .<https://w3id.org/oc/meta/br/0610491907> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://purl.org/spar/fabio/JournalArticle> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891816> .<https://w3id.org/oc/meta/br/0610491907> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://purl.org/spar/fabio/Expression> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891809> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891819> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891815> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891812> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891813> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891818> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891810> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891814> . } }" .
+}
+
+
