@@ -57,8 +57,7 @@ class TestFillerFixer(unittest.TestCase):
 
     def setUp(self):
         self.fixer = FillerFixer(
-            sparql_endpoint="http://localhost:8890/sparql/",
-            auth=None,
+            endpoint="http://example.org/sparql/",
         )
         self.local_dataset = Dataset(default_union=True)
         self.local_dataset.parse(TEST_DATA_FP, format='trig')
@@ -193,8 +192,7 @@ class TestFillerFixer(unittest.TestCase):
 class TestDateTimeFixer(unittest.TestCase):
     def setUp(self):
         self.fixer = DateTimeFixer(
-            sparql_endpoint="http://localhost:8890/sparql/",
-            auth=None,
+            endpoint="http://example.org/sparql/"
         )
         self.local_dataset = Dataset(default_union=True)
         self.local_dataset.parse(TEST_DATA_FP, format='trig')
@@ -262,8 +260,7 @@ class TestMissingPrimSourceFixer(unittest.TestCase):
     def setUp(self):
         self.fixer = MissingPrimSourceFixer(
             meta_dumps_pub_dates=meta_dumps_pub_dates,
-            sparql_endpoint="http://localhost:8890/sparql/",
-            auth=None,
+            endpoint="http://example.org/sparql/"
         )
         self.local_dataset = Dataset(default_union=True)
         self.local_dataset.parse(TEST_DATA_FP, format='trig')
@@ -329,8 +326,7 @@ class TestMultiPAFixer(unittest.TestCase):
 
     def setUp(self):
         self.fixer = MultiPAFixer(
-            sparql_endpoint="http://localhost:8890/sparql/",
-            auth=None,
+            endpoint="http://example.org/sparql/"
         )
         self.local_dataset = Dataset(default_union=True)
         self.local_dataset.parse(TEST_DATA_FP, format='trig')
@@ -398,8 +394,7 @@ class TestMultiObjectFixer(unittest.TestCase):
     def setUp(self):
         self.fixer = MultiObjectFixer(
             meta_dumps_pub_dates=meta_dumps_pub_dates,
-            sparql_endpoint="http://localhost:8890/sparql/",
-            auth=None,
+            endpoint="http://example.org/sparql/"
         )
         self.local_dataset = Dataset(default_union=True)
         self.local_dataset.parse(TEST_DATA_FP, format='trig')
@@ -468,11 +463,8 @@ class TestMultiObjectFixer(unittest.TestCase):
 
 class TestFixProcess(unittest.TestCase):
     def setUp(self):
-        self.prim_source_uri = 'https://doi.org/10.5281/zenodo.15855112'
-        self.pa_uri = 'https://w3id.org/oc/meta/prov/pa/1'
         self.meta_dumps_pub_dates = meta_dumps_pub_dates
-        self.sparql_endpoint = "http://localhost:8890/sparql/"
-        self.auth = None
+        self.sparql_endpoint = "http://example.org/sparql/"
         self.dry_run = False
 
         self.local_dataset = Dataset(default_union=True)
@@ -509,9 +501,9 @@ class TestFixProcess(unittest.TestCase):
         mock_update.side_effect = self.local_update
 
         fix_process(
-            meta_dumps_pub_dates=self.meta_dumps_pub_dates,
-            sparql_endpoint=self.sparql_endpoint,
-            auth=self.auth,
+            self.sparql_endpoint,
+            self.meta_dumps_pub_dates,
+            log_results=False,
             dry_run=self.dry_run,
         )
 

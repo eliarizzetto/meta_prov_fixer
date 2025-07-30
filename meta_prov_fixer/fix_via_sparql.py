@@ -22,13 +22,22 @@ from meta_prov_fixer.utils import *
 
 
 class ProvenanceIssueFixer:
-    def __init__(self, sparql_endpoint: str = 'http://localhost:8890/sparql/', auth: Union[str, None] = None, log_results=False):
-        self.endpoint = sparql_endpoint
+    def __init__(self, endpoint: str, log_results:bool=False):
+        """
+        Base class for fixing provenance issues via SPARQL queries.
+        Initializes the SPARQL endpoint and sets up the query method.
+        Classes dedicated to fixing specific issues should inherit from this class and implement the `detect_issue` and `fix_issue` methods.
+        
+        :param sparql_endpoint: The SPARQL endpoint URL.
+        :type sparql_endpoint: str
+        :param log_results: If True, logs the results of the queries to a file inside 'prov_fix_logs' directory.
+        :type log_results: bool
+        """
+
+        self.endpoint = endpoint
         self.sparql = SPARQLWrapper(self.endpoint)
         self.sparql.setReturnFormat(JSON)
         self.sparql.setMethod(POST)
-        if auth:
-            self.sparql.addCustomHttpHeader("Authorization", auth)
         self.log_results = log_results
 
 
@@ -105,16 +114,17 @@ class FillerFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to filler snapshots in the OpenCitations Meta graph.
     """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, endpoint: str, log_results:bool=False):
+        super().__init__(endpoint, log_results=log_results)
 
-    @log_output_to_file(enabled=True)
+    @log_output_to_file()
     def detect_issue(self, limit=10000) -> List[Tuple[str, Dict[str, Set[str]]]]:
         """
-        Fetches snapshots that are fillers and need to be deleted, grouped by their named graph.
-        Returns a dictionary where keys are graph URIs and values are dictionaries with 'to_delete' and 'remaining_snapshots' sets,
-        storing respectively the URIs of the graph's snapshots that should be deleted and the URIs of the other snapshots.
-        :return: A List of 2-items tuples, where the first element is a graph URI and the second element is a dictionary with 'to_delete' and 'remaining_snapshots' as keys and a set as value of both keys.
+        Fetch snapshots that are fillers and need to be deleted, grouped by their named graph.
+
+        :param limit: The number of results to fetch per page.
+        :type limit: int
+        :returns: A list of tuples, where the first element is a graph URI and the second element is a dictionary with 'to_delete' and 'remaining_snapshots' as keys and a set as value of both keys.
         :rtype: List[Tuple[str, Dict[str, Set[str]]]]
         """
         grouped_result = defaultdict(lambda: {'to_delete': set(), 'remaining_snapshots': set()})
@@ -198,11 +208,16 @@ class FillerFixer(ProvenanceIssueFixer):
     @staticmethod
     def map_se_names(to_delete:set, remaining: set) -> dict:
         """
-        For each snapshot in the union of to_delete and remaining (containing snapshots URIs), generates a new URI.
-        Values in mapping dictionary are not unique, i.e., multiple old URIs can be mapped to the same new URI.
-        If to_delete is empty, the returned dictionary will have identical keys and values, i.e., the URIs will not change.
-        Each URI in to_delete will be mapped to the new name of the URI in remaining that immediately precedes it in
-        a sequence ordered by sequence number. For example::
+        For each snapshot in the union of ``to_delete`` and ``remaining`` (containing snapshot URIs), generates a new URI.
+
+        Values in the mapping dictionary are not unique, i.e., multiple old URIs can be mapped to the same new URI.
+        If ``to_delete`` is empty, the returned dictionary will have identical keys and values, i.e., the URIs will not change.
+        Each URI in ``to_delete`` will be mapped to the new name of the URI in ``remaining`` that immediately precedes it in
+        a sequence ordered by sequence number.
+
+        **Examples:**
+
+        .. code-block:: python
 
             to_delete = {'https://w3id.org/oc/meta/br/06101234191/prov/se/3'}
             remaining = {'https://w3id.org/oc/meta/br/06101234191/prov/se/1', 'https://w3id.org/oc/meta/br/06101234191/prov/se/2', 'https://w3id.org/oc/meta/br/06101234191/prov/se/4'}
@@ -215,36 +230,11 @@ class FillerFixer(ProvenanceIssueFixer):
                 'https://w3id.org/oc/meta/br/06101234191/prov/se/4': 'https://w3id.org/oc/meta/br/06101234191/prov/se/3'
             }
 
-            #-----------
-            to_delete = {'https://w3id.org/oc/meta/br/06101234191/prov/se/2', 'https://w3id.org/oc/meta/br/06101234191/prov/se/3'}
-            remaining = {'https://w3id.org/oc/meta/br/06101234191/prov/se/1', 'https://w3id.org/oc/meta/br/06101234191/prov/se/4'}
-
-            # The returned mapping will be:
-            {
-                'https://w3id.org/oc/meta/br/06101234191/prov/se/1': 'https://w3id.org/oc/meta/br/06101234191/prov/se/1',
-                'https://w3id.org/oc/meta/br/06101234191/prov/se/2': 'https://w3id.org/oc/meta/br/06101234191/prov/se/1',
-                'https://w3id.org/oc/meta/br/06101234191/prov/se/3': 'https://w3id.org/oc/meta/br/06101234191/prov/se/1',
-                'https://w3id.org/oc/meta/br/06101234191/prov/se/4': 'https://w3id.org/oc/meta/br/06101234191/prov/se/2'
-            }
-
-            # -----------
-            to_delete = {'https://w3id.org/oc/meta/br/06101234191/prov/se/2', 'https://w3id.org/oc/meta/br/06101234191/prov/se/4'}
-            remaining = {'https://w3id.org/oc/meta/br/06101234191/prov/se/1', 'https://w3id.org/oc/meta/br/06101234191/prov/se/3', 'https://w3id.org/oc/meta/br/06101234191/prov/se/5'}
-
-            # The returned mapping will be:
-            {
-                'https://w3id.org/oc/meta/br/06101234191/prov/se/1': 'https://w3id.org/oc/meta/br/06101234191/prov/se/1',
-                'https://w3id.org/oc/meta/br/06101234191/prov/se/2': 'https://w3id.org/oc/meta/br/06101234191/prov/se/1',
-                'https://w3id.org/oc/meta/br/06101234191/prov/se/3': 'https://w3id.org/oc/meta/br/06101234191/prov/se/2',
-                'https://w3id.org/oc/meta/br/06101234191/prov/se/4': 'https://w3id.org/oc/meta/br/06101234191/prov/se/2',
-                'https://w3id.org/oc/meta/br/06101234191/prov/se/5': 'https://w3id.org/oc/meta/br/06101234191/prov/se/3'
-            }
-        
         :param to_delete: A set of snapshot URIs that should be deleted.
         :type to_delete: set
         :param remaining: A set of snapshot URIs that should remain in the graph (AFTER BEING RENAMED).
         :type remaining: set
-        :return: A dictionary mapping old snapshot URIs to their new URIs.
+        :returns: A dictionary mapping old snapshot URIs to their new URIs.
         :rtype: dict
         """
 
@@ -282,6 +272,7 @@ class FillerFixer(ProvenanceIssueFixer):
         :type mapping: dict
         """
         # TODO: consider modifying the query template to support bulk updates (using UNION in the WHERE block)
+
         # !IMPORTANT: mapping is sorted ascendingly by the sequence number of old URI (get_sequence_number on mapping's keys)
         # This is required, otherwise newly inserted URIs might be deleted when iterating over mapping's items
         mapping = dict(sorted(mapping.items(), key=lambda i: get_seq_num(i[0])))
@@ -354,12 +345,14 @@ class FillerFixer(ProvenanceIssueFixer):
     
     def adapt_invalidatedAtTime(self, graph_uri: str, snapshots: list) -> None:
         """
-        Updates the ``prov:invalidatedAtTime`` property of each snapshot in the provided list to match 
+        Update the ``prov:invalidatedAtTime`` property of each snapshot in the provided list to match 
         the value of ``prov:generatedAtTime`` of the following snapshot.
+
         :param graph_uri: The URI of the named graph containing the snapshots.
         :type graph_uri: str
         :param snapshots: A list of snapshot URIs sorted by their sequence number.
         :type snapshots: list
+        :returns: None
         """
         
         # TODO: consider modifying the query template to support bulk updates
@@ -420,15 +413,20 @@ class DateTimeFixer(ProvenanceIssueFixer):
     A class to fix issues related to ill-formed datetime values in the OpenCitations Meta graph.
     This class provides methods to fetch quads with ill-formed datetime values, correct them, and batch fix them in the triplestore.
     """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, endpoint: str, log_results:bool=False):
+        super().__init__(endpoint, log_results=log_results)
     
-    @log_output_to_file(enabled=True)
+    @log_output_to_file()
     def detect_issue(self, limit=1000000) -> List[Tuple[str]]:
         """
-        Fetches all quads where the datetime object value is not syntactically correct or complete, including cases where
-        the timezone is not specified (which would make the datetime impossible to compare with other offset-aware datetimes) 
+        Fetch all quads where the datetime object value is not syntactically correct or complete, including cases where
+        the timezone is not specified (making the datetime impossible to compare with other offset-aware datetimes) 
         and/or where the time value includes microseconds. Querying is paginated.
+
+        :param limit: The number of results to fetch per page.
+        :type limit: int
+        :returns: List of tuples (graph URI, subject, predicate, datetime value).
+        :rtype: List[Tuple[str, str, str, str]]
         """
         result = []
 
@@ -468,10 +466,18 @@ class DateTimeFixer(ProvenanceIssueFixer):
     
     def batch_fix_illformed_datetimes(self, quads: list, batch_size=500):
         """
-        Replaces the datetime object of each quad in ``quads`` with its correct version (offset-aware and without microseconds).
+        Replace the datetime object of each quad in ``quads`` with its correct version (offset-aware and without microseconds).
         Note that ``xsd:dateTime`` is always made explicit in newly inserted values.
-        N.B.: if a snapshot has multiple objects for ``prov:invalidatedAtTime`` or ``prov:generatedAtTime`` (though this should never 
-        be the case), they all get deleted and replaced with a single, correct, value.
+
+        .. note::
+           If a snapshot has multiple objects for ``prov:invalidatedAtTime`` or ``prov:generatedAtTime`` (though this should never 
+           be the case), they all get deleted and replaced with a single, correct, value.
+
+        :param quads: List of quads to fix.
+        :type quads: list
+        :param batch_size: Number of quads to process per batch.
+        :type batch_size: int
+        :returns: None
         """
 
         template = Template('''
@@ -515,17 +521,27 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to creation snapshots that do not have a primary source in the OpenCitations Meta graph.
     """
-    def __init__(self, meta_dumps_pub_dates: List[Tuple[str, str]], *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, endpoint: str, meta_dumps_pub_dates: List[Tuple[str, str]], log_results:bool=False):
+        """
+        :param endpoint: The SPARQL endpoint URL.
+        :type endpoint: str
+        :param meta_dumps_pub_dates: Register of published OpenCitations Meta dumps, in the form: [(<ISO format date 1>, <dump DOI1>), (<ISO format date 2>, <dump DOI2>), ...]
+        :type meta_dumps_pub_dates: List[Tuple[str, str]]
+        :param log_results: If True, logs the results of the queries to a file inside 'prov_fix_logs' directory.
+        :type log_results: bool
+        """
+        super().__init__(endpoint, log_results=log_results)
         validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
         self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
     
-    @log_output_to_file(enabled=True)
+    @log_output_to_file()
     def detect_issue(self, limit=10000) -> List[Tuple[str, str]]:
         """
-        Fetches creation snapshots that do not have a primary source.
-        Returns a list of tuples containing the graph URI and the snapshot URI.
-        :return: A list of tuples with graph URI and snapshot URI.
+        Fetch creation snapshots that do not have a primary source.
+
+        :param limit: The number of results to fetch per page.
+        :type limit: int
+        :returns: A list of tuples with snapshot URI and generation time.
         :rtype: List[Tuple[str, str]]
         """
         results = []
@@ -563,12 +579,13 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
     
     def batch_insert_missing_primsource(self, creations_to_fix: List[Tuple[str, str]], batch_size=500):
         """
-        Inserts primary sources for creation snapshots that do not have one, in batches. 
+        Insert primary sources for creation snapshots that do not have one, in batches.
+
         :param creations_to_fix: A list of tuples where each tuple contains the snapshot URI and the generation time, representing all the creation snapshots that must be fixed.
-        :param batch_size: The number of snapshots to process in each batch.
         :type creations_to_fix: List[Tuple[str, str]]
+        :param batch_size: The number of snapshots to process in each batch.
         :type batch_size: int
-        :return: None
+        :returns: None
         """
         template = Template("""
         PREFIX prov: <http://www.w3.org/ns/prov#>
@@ -604,13 +621,18 @@ class MultiPAFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to snapshots that have multiple objects for the ``prov:wasAttributedTo`` property in the OpenCitations Meta graph.
     """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, endpoint: str, log_results:bool=False):
+        super().__init__(endpoint, log_results=log_results)
 
-    @log_output_to_file(enabled=True)
+    @log_output_to_file()
     def detect_issue(self, limit=10000):
         """
-        Fetches graph-snapshot pairs where the snapshot has more than one object for the ``prov:wasAttributedTo`` property.
+        Fetch graph-snapshot pairs where the snapshot has more than one object for the ``prov:wasAttributedTo`` property.
+
+        :param limit: The number of results to fetch per page.
+        :type limit: int
+        :returns: List of tuples (graph URI, snapshot URI).
+        :rtype: List[Tuple[str, str]]
         """
         result = []
 
@@ -649,8 +671,13 @@ class MultiPAFixer(ProvenanceIssueFixer):
 
     def batch_fix_extra_pa(self, multi_pa_snapshots:List[Tuple[str]], batch_size=500):
         """
-        Deletes triples where the value of prov:wasAttributedTo is <https://w3id.org/oc/meta/prov/pa/1> if there is at least another processing agent for the same snapshot subject. 
+        Delete triples where the value of ``prov:wasAttributedTo`` is <https://w3id.org/oc/meta/prov/pa/1> if there is at least another processing agent for the same snapshot subject.
+
         :param multi_pa_snapshots: A list of tuples where each tuple contains a graph URI and a snapshot URI.
+        :type multi_pa_snapshots: List[Tuple[str, str]]
+        :param batch_size: Number of snapshots to process per batch.
+        :type batch_size: int
+        :returns: None
         """
         template = Template("""
         PREFIX prov: <http://www.w3.org/ns/prov#>
@@ -693,23 +720,26 @@ class MultiObjectFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to graphs where at least one snapshot has too many objects for specific properties in the OpenCitations Meta graph.
     """
-    def __init__(self, meta_dumps_pub_dates: List[Tuple[str, str]], *args, **kwargs):
+    def __init__(self, endpoint:str, meta_dumps_pub_dates: List[Tuple[str, str]], log_results:bool=False):
         """
         :param meta_dumps_pub_dates: Register of published OpenCitations Meta dumps, in the form: [(<ISO format date 1>, <dump DOI1>), (<ISO format date 2>, <dump DOI2>), ...]
         :type meta_dumps_pub_dates: List[Tuple[str, str]]
         """
-        super().__init__(*args, **kwargs)
+        super().__init__(endpoint, log_results=log_results)
         self.pa_uri = "https://w3id.org/oc/meta/prov/pa/1" # URI of the processing agent to be used as objects of prov:wasAtttributedTo for newly created snapshots, which is always the default one
         validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
         self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
     
-    @log_output_to_file(enabled=True)
+    @log_output_to_file()
     def detect_issue(self, limit=10000) -> List[str]:
         """
-        Fetches graphs containing at least one snapshot with multiple objects for 
-        a property that only admits one (e.g. oc:hasUpdateQuery).
+        Fetch graphs containing at least one snapshot with multiple objects for 
+        a property that only admits one (e.g. ``oc:hasUpdateQuery``).
 
-        :return: A list of distinct graph URIs.
+        :param limit: The number of results to fetch per page.
+        :type limit: int
+        :returns: A list of tuples (graph URI, generation time).
+        :rtype: List[Tuple[str, str]]
         """
         output = []
 
@@ -753,10 +783,12 @@ class MultiObjectFixer(ProvenanceIssueFixer):
     
     def reset_multi_object_graphs(self, graphs:list):
         """
-        Resets each graph in graphs by deleting the existing snapshots and creating a new 
-        creation snapshot, which will be the only one left for that graph. 
+        Reset each graph in ``graphs`` by deleting the existing snapshots and creating a new 
+        creation snapshot, which will be the only one left for that graph.
 
-        :param graphs: A list of distinct graph URIs that have too many objects for properties that only admit one.
+        :param graphs: A list of tuples (graph URI, generation time) for graphs that have too many objects for properties that only admit one.
+        :type graphs: list
+        :returns: None
         """
         # #  The following always uses the most ancient generation datetime 
         # #  (regardless of whether it's the datetime of snapshot 1)
@@ -871,9 +903,9 @@ class MultiObjectFixer(ProvenanceIssueFixer):
 
 
 def fix_process(
+        endpoint: str,
         meta_dumps_pub_dates: List[Tuple[str, str]],
-        sparql_endpoint: str,
-        auth: Union[str, None] = None,
+        log_results = False,
         dry_run: bool = False
     ):
     """
@@ -881,52 +913,35 @@ def fix_process(
     """
     
     # (1) Fix filler snapshots
-    ff = FillerFixer(
-        sparql_endpoint=sparql_endpoint,
-        auth=auth,
-    )
+    ff = FillerFixer(endpoint, log_results=log_results)
     if not dry_run:
         ff.fix_issue()
     else:
         logging.debug("[fix_process]: Would delete filler snapshots and update related graphs.")
 
     # (2) Fix DateTime values: DateTimeFixer
-    dtf = DateTimeFixer(
-        sparql_endpoint=sparql_endpoint,
-        auth=auth,
-    )
+    dtf = DateTimeFixer(endpoint, log_results=log_results)
     if not dry_run:
         dtf.fix_issue()
     else: 
         logging.debug("[fix_process]: Would update invalid datetime values.")
 
     # (3) Fix creation snapshots without primary source
-    mpsf = MissingPrimSourceFixer(
-        meta_dumps_pub_dates=meta_dumps_pub_dates,
-        sparql_endpoint=sparql_endpoint,
-        auth=auth,
-    )
+    mpsf = MissingPrimSourceFixer(endpoint, meta_dumps_pub_dates, log_results=log_results)
     if not dry_run:
         mpsf.fix_issue()
     else:
         logging.debug("[fix_process]: Would insert a primary source for snapshots lacking a value for this ")
 
     # (4) Fix snapshots with multiple objects for prov:wasAttributedTo
-    mpaf = MultiPAFixer(
-        sparql_endpoint=sparql_endpoint,
-        auth=auth,
-    )
+    mpaf = MultiPAFixer(endpoint, log_results=log_results)
     if not dry_run:
         mpaf.fix_issue()
     else:
         logging.debug("[fix_process]: Would remove extra values for prov:wasAttributedTo.")
 
     # (5) Fix graphs with too many objects for specific properties
-    mof = MultiObjectFixer(
-        meta_dumps_pub_dates=meta_dumps_pub_dates,
-        sparql_endpoint=sparql_endpoint,
-        auth=auth,
-    )
+    mof = MultiObjectFixer(endpoint, meta_dumps_pub_dates, log_results=log_results)
     if not dry_run:
         mof.fix_issue()
     else:

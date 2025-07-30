@@ -17,9 +17,16 @@ import functools
 
 def log_output_to_file(directory="prov_fix_logs", enabled=False):
     """
-    Decorator used to store the output of the methods detecting the errors into files. 
-    The output is transformed into JSON (with the least possible changes to the original data structures). 
+    Decorator used to store the output of the methods detecting the errors into files.
+
+    The output is transformed into JSON (with the least possible changes to the original data structures).
     Files are saved inside the 'prov_fix_logs' directory.
+
+    :param directory: Directory where log files are saved.
+    :type directory: str
+    :param enabled: Whether logging is enabled.
+    :type enabled: bool
+    :returns: Decorator function.
     """
     def decorator(func):
         def make_json_safe(obj):
@@ -89,16 +96,14 @@ def log_output_to_file(directory="prov_fix_logs", enabled=False):
 
 def normalise_datetime(datetime_str: str) -> str:
     """
-    Normalises a datetime string (offset naive or aware, with or without 
-    microseconds) making it a UTC-aware ISO 8601 datetime string with no timestamp
-    (i.e. with no microseconds specified). When converting from offset-naive to 
-    offset-aware (where necessary), Italian timezone is assumed. UTC is made explicit 
-    as 'Z' (not '+00:00'). If input string contains the explicit xsd datatype (^^xsd:string, 
-    ^^xsd:dateTime, ^^http://www.w3.org/2001/XMLSchema#dateTime, or ^^http://www.w3.org/2001/XMLSchema#string),
-    the substring representing the datatype is silently removed.
-    
-    param datetime_str (str): Datetime string, possibly as a timestamp.
-    return: UTC-aware ISO 8601 string without microseconds.
+    Normalise a datetime string (offset naive or aware, with or without microseconds) making it a UTC-aware ISO 8601 datetime string with no microseconds specified.
+
+    When converting from offset-naive to offset-aware (where necessary), Italian timezone is assumed. UTC is made explicit as 'Z' (not '+00:00'). If input string contains the explicit xsd datatype (^^xsd:string, ^^xsd:dateTime, ^^http://www.w3.org/2001/XMLSchema#dateTime, or ^^http://www.w3.org/2001/XMLSchema#string), the substring representing the datatype is silently removed.
+
+    :param datetime_str: Datetime string, possibly as a timestamp.
+    :type datetime_str: str
+    :returns: UTC-aware ISO 8601 string without microseconds.
+    :rtype: str
     """
     datetime_str = datetime_str.replace("^^xsd:dateTime", "")
     datetime_str = datetime_str.replace("^^http://www.w3.org/2001/XMLSchema#dateTime", "")
@@ -121,13 +126,14 @@ def normalise_datetime(datetime_str: str) -> str:
 
 def get_provenance_graph(entity_iri: str, data_root: str) -> dict:
     """
-    Uses the entity's IRI (i.e. its OMID) and finds the exact 
-    path of the file storing its provenance graph in a subdirectory of data_root. 
-    Then, it reads the file and returns the provenance graph as a dictionary.
-    
-    param entity_iri: The IRI of the entity whose provenance graph is to be retrieved.
-    param data_root: The path to the root directory storing the provenance data.
-    return: The provenance graph of the entity as a dictionary.
+    Use the entity's IRI (i.e. its OMID) to find the exact path of the file storing its provenance graph in a subdirectory of ``data_root``. Reads the file and returns the provenance graph as a dictionary.
+
+    :param entity_iri: The IRI of the entity whose provenance graph is to be retrieved.
+    :type entity_iri: str
+    :param data_root: The path to the root directory storing the provenance data.
+    :type data_root: str
+    :returns: The provenance graph of the entity as a dictionary.
+    :rtype: dict
     """
     digits = entity_iri.split('/')[-1] 
     supplier_prefix = digits[:digits.find('0', 1) + 1]
@@ -157,12 +163,14 @@ def get_provenance_graph(entity_iri: str, data_root: str) -> dict:
 
 def read_rdf_meta_files(data_dir: str, to_read:Literal["provenance", "metadata"]) -> Generator[List[dict], None, None]:
     """
-    Iterates over the files in any given directory storing OpenCitations Meta RDF files 
-    (metadata or provenance) and yields the JSON-LD data as a list of dictionaries.
-    
+    Iterate over the files in any given directory storing OpenCitations Meta RDF files (metadata or provenance) and yield the JSON-LD data as a list of dictionaries.
+
     :param data_dir: Path to the directory containing the decompressed provenance archive.
+    :type data_dir: str
     :param to_read: The type of RDF data to read, i.e. either 'provenance' or 'metadata'.
-    :yield: A list of dictionaries representing the content of each JSON-LD file.
+    :type to_read: Literal["provenance", "metadata"]
+    :yields: A list of dictionaries representing the content of each JSON-LD file.
+    :rtype: Generator[List[dict], None, None]
     """
     fpaths = set()
     to_read = to_read.lower().strip()
@@ -196,12 +204,17 @@ def read_rdf_meta_files(data_dir: str, to_read:Literal["provenance", "metadata"]
 
 def extract_specific_folders(archive_path, output_dir, supplier_prefixes: list, entity_type: str):
     """
-    Extracts only the specified folders and their subfolders from .tar, .zip, or .xz archives.
+    Extract only the specified folders and their subfolders from .tar, .zip, or .xz archives.
 
-    :param archive_path: Path to the archive file
-    :param output_dir: Directory where files will be extracted
-    :param supplier_prefixes: List of supplier prefixes (names of root folders to extract)
-    :param entity_type: The type of entity, i.e., one of: 'br', 'id', 'ra', 'ar', 're'
+    :param archive_path: Path to the archive file.
+    :type archive_path: str
+    :param output_dir: Directory where files will be extracted.
+    :type output_dir: str
+    :param supplier_prefixes: List of supplier prefixes (names of root folders to extract).
+    :type supplier_prefixes: list
+    :param entity_type: The type of entity, i.e., one of: 'br', 'id', 'ra', 'ar', 're'.
+    :type entity_type: str
+    :returns: None
     """
     start_time = time.time()  # Start timing
     print(f"Opening archive: {archive_path}")
@@ -245,13 +258,13 @@ def extract_specific_folders(archive_path, output_dir, supplier_prefixes: list, 
 
 def get_described_res_omid(prov_uri: str) -> str:
     """
-    Returns the URI of the resource described by a provenance graph or snapshot by removing the 
-    '/prov/se/<counter>' suffix if a snapshot URI is passed, or the '/prov/' suffix if
-    a provenance graph IRI (i.e. the graph name) is passed.
-    
-    :param prov_uri: The provenance URI from which to extract the base URI, i.e. either the URI
-        of a snapshot (ending with '/prov/se/<counter>') or the name of a provenance graph (ending with '/prov/').
-    :return: The URI of the resource described by the provenance entity, returned as a string.
+    Return the URI of the resource described by a provenance graph or snapshot by removing the 
+    '/prov/se/<counter>' suffix if a snapshot URI is passed, or the '/prov/' suffix if a provenance graph IRI (i.e. the graph name) is passed.
+
+    :param prov_uri: The provenance URI from which to extract the base URI, i.e. either the URI of a snapshot (ending with '/prov/se/<counter>') or the name of a provenance graph (ending with '/prov/').
+    :type prov_uri: str
+    :returns: The URI of the resource described by the provenance entity.
+    :rtype: str
     """
     if prov_uri.endswith('/prov/'):
         return prov_uri.replace("/prov/", '')
@@ -261,8 +274,12 @@ def get_described_res_omid(prov_uri: str) -> str:
     
 def get_seq_num(se_uri: str) -> Union[int, None]:
     """
-    Returns as an integer the sequence number of a snapshot (i.e. its counter) if it ends with a number, else returns None.
-    param se_uri: the URI of the snapshot entity
+    Return as an integer the sequence number of a snapshot (i.e. its counter) if it ends with a number, else returns None.
+
+    :param se_uri: The URI of the snapshot entity.
+    :type se_uri: str
+    :returns: Sequence number as integer, or None.
+    :rtype: Union[int, None]
     """
     if se_uri[-1].isdigit():
         return int(se_uri.split('/')[-1])
@@ -270,39 +287,65 @@ def get_seq_num(se_uri: str) -> Union[int, None]:
 
 def remove_seq_num(se_uri:str) -> str:
     """
-    Returns the URI of a provenance snapshot without its sequence number (counter).
-    E.g. 'https://w3id.org/oc/meta/br/06104375687/prov/se/1' -> 'https://w3id.org/oc/meta/br/06104375687/prov/se/'.
-    param se_uri: the URI of the snapshot entity. 
+    Return the URI of a provenance snapshot without its sequence number (counter).
+
+    Example:
+
+    .. code-block:: python
+
+        'https://w3id.org/oc/meta/br/06104375687/prov/se/1' -> 'https://w3id.org/oc/meta/br/06104375687/prov/se/'
+
+    :param se_uri: The URI of the snapshot entity.
+    :type se_uri: str
+    :returns: URI without sequence number.
+    :rtype: str
     """
     return se_uri.rsplit('/', 1)[0] + '/'
 
 def get_graph_uri_from_se_uri(se_uri:str) -> str:
     """
-    Returns the URI (name) of a provenance named graph starting from the URI of one of its snapshots.
-    E.g. 'https://w3id.org/oc/meta/br/06104375687/prov/se/1' -> 'https://w3id.org/oc/meta/br/06104375687/prov/'.
-    param se_uri: the URI of the snapshot entity. 
+    Return the URI (name) of a provenance named graph starting from the URI of one of its snapshots.
+
+    Example:
+
+    .. code-block:: python
+
+        'https://w3id.org/oc/meta/br/06104375687/prov/se/1' -> 'https://w3id.org/oc/meta/br/06104375687/prov/'
+
+    :param se_uri: The URI of the snapshot entity.
+    :type se_uri: str
+    :returns: The URI of the provenance named graph.
+    :rtype: str
     """
     return se_uri.split('se/', 1)[0]
 
 def get_previous_meta_dump_uri(meta_dumps_pub_dates, dt:str)-> str:
     """
-    Returns the DOI of the OpenCitations Meta dump that was published before the given date.
+    Return the DOI of the OpenCitations Meta dump that was published before the given date.
+
+    Example of a well-formed ``meta_dumps_pub_dates`` register:
+
+    .. code-block:: python
+
+        meta_dumps_pub_dates = [
+            ('2022-12-19', 'https://doi.org/10.6084/m9.figshare.21747536.v1'),
+            ('2022-12-20', 'https://doi.org/10.6084/m9.figshare.21747536.v2'),
+            ('2023-02-15', 'https://doi.org/10.6084/m9.figshare.21747536.v3'),
+            ('2023-06-28', 'https://doi.org/10.6084/m9.figshare.21747536.v4'),
+            ('2023-10-26', 'https://doi.org/10.6084/m9.figshare.21747536.v5'),
+            ('2024-04-06', 'https://doi.org/10.6084/m9.figshare.21747536.v6'),
+            ('2024-06-17', 'https://doi.org/10.6084/m9.figshare.21747536.v7'),
+            ('2025-02-02', 'https://doi.org/10.6084/m9.figshare.21747536.v8'),
+            ('2025-07-10', 'https://doi.org/10.5281/zenodo.15855112')
+        ]
+
+    :param meta_dumps_pub_dates: List of tuples (date, DOI) for Meta dumps.
+    :type meta_dumps_pub_dates: list
     :param dt: A date string in ISO format (YYYY-MM-DD).
     :type dt: str
-    :return: The DOI of the previous Meta dump.
+    :returns: The DOI of the previous Meta dump.
     :rtype: str
     """
-    ## Example of meta_dumps_pub_dates register:
-    # meta_dumps_pub_dates = [ 
-    #     ('2022-12-19', 'https://doi.org/10.6084/m9.figshare.21747536.v1'),
-    #     ('2022-12-20', 'https://doi.org/10.6084/m9.figshare.21747536.v2'),
-    #     ('2023-02-15', 'https://doi.org/10.6084/m9.figshare.21747536.v3'),
-    #     ('2023-06-28', 'https://doi.org/10.6084/m9.figshare.21747536.v4'),
-    #     ('2023-10-26', 'https://doi.org/10.6084/m9.figshare.21747536.v5'),
-    #     ('2024-04-06', 'https://doi.org/10.6084/m9.figshare.21747536.v6'),
-    #     ('2024-06-17', 'https://doi.org/10.6084/m9.figshare.21747536.v7'),
-    #     ('2025-02-02', 'https://doi.org/10.6084/m9.figshare.21747536.v8')
-    # ]
 
     # meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
     d = date.fromisoformat(dt.strip()[:10])
@@ -322,20 +365,30 @@ def get_previous_meta_dump_uri(meta_dumps_pub_dates, dt:str)-> str:
 
 def validate_meta_dumps_pub_dates(meta_dumps_register:List[Tuple[str, str]]):
     """
-    Validates the register of published OpenCitations Meta dump. Example of a well-formed register:
-    [
-        ('2022-12-19', 'https://doi.org/10.6084/m9.figshare.21747536.v1'),
-        ('2022-12-20', 'https://doi.org/10.6084/m9.figshare.21747536.v2'),
-        ('2023-02-15', 'https://doi.org/10.6084/m9.figshare.21747536.v3'),
-        ('2023-06-28', 'https://doi.org/10.6084/m9.figshare.21747536.v4'),
-        ('2023-10-26', 'https://doi.org/10.6084/m9.figshare.21747536.v5'),
-        ('2024-04-06', 'https://doi.org/10.6084/m9.figshare.21747536.v6'),
-        ('2024-06-17', 'https://doi.org/10.6084/m9.figshare.21747536.v7'),
-        ('2025-02-02', 'https://doi.org/10.6084/m9.figshare.21747536.v8')
-    ]
+    Validate the register of published OpenCitations Meta dumps.
+
+    Example of a well-formed register:
+
+    .. code-block:: python
+
+        [
+            ('2022-12-19', 'https://doi.org/10.6084/m9.figshare.21747536.v1'),
+            ('2022-12-20', 'https://doi.org/10.6084/m9.figshare.21747536.v2'),
+            ('2023-02-15', 'https://doi.org/10.6084/m9.figshare.21747536.v3'),
+            ('2023-06-28', 'https://doi.org/10.6084/m9.figshare.21747536.v4'),
+            ('2023-10-26', 'https://doi.org/10.6084/m9.figshare.21747536.v5'),
+            ('2024-04-06', 'https://doi.org/10.6084/m9.figshare.21747536.v6'),
+            ('2024-06-17', 'https://doi.org/10.6084/m9.figshare.21747536.v7'),
+            ('2025-02-02', 'https://doi.org/10.6084/m9.figshare.21747536.v8'),
+            ('2025-07-10', 'https://doi.org/10.5281/zenodo.15855112')
+        ]
+
+    :param meta_dumps_register: List of tuples (date, DOI) for Meta dumps.
+    :type meta_dumps_register: List[Tuple[str, str]]
+    :returns: None
     """
     meta_dumps_register = sorted(meta_dumps_register, key=lambda x: datetime.strptime(x[0], r'%Y-%m-%d'))
-    if len(meta_dumps_register) < 8: # number of published Meta dumps at the time of writing this code (2025-07-01)
+    if len(meta_dumps_register) < 9: # number of published Meta dumps at the time of writing this code (2025-07-30)
         raise ValueError("[validate_meta_dumps_pub_dates]: The list of published Meta dumps is incomplete and must be updated.")
     
     # warn if the last date is more than 2 months ago
