@@ -203,7 +203,7 @@ class FillerFixer(ProvenanceIssueFixer):
             query = template.substitute(dels=dels_str)
 
             self._update(query)
-            logging.debug(f"Deleted triples of filler snapshots in graphs {i} to {len(batch)}.")
+            logging.debug(f"Deleted triples of filler snapshots in graphs {i} to {i+batch_size}.")
 
     @staticmethod
     def map_se_names(to_delete:set, remaining: set) -> dict:
@@ -335,13 +335,13 @@ class FillerFixer(ProvenanceIssueFixer):
         # }
         # """)
 
-        logging.debug("Renaming snapshots in the triplestore...")
+        # logging.debug("Renaming snapshots in the triplestore...")
         for old_uri, new_uri in mapping.items():
             if old_uri == new_uri:
                 continue
             query = template.substitute(old_uri=old_uri, new_uri=new_uri)
             self._update(query)
-        logging.debug(f"Snapshot entities were re-named in all named graphs according to the following mapping: {mapping}.")
+        # logging.debug(f"Snapshot entities were re-named in all named graphs according to the following mapping: {mapping}.")
     
     def adapt_invalidatedAtTime(self, graph_uri: str, snapshots: list) -> None:
         """
@@ -385,7 +385,7 @@ class FillerFixer(ProvenanceIssueFixer):
             )
 
             self._update(query)
-            logging.debug(f"Replaced the value of invalidatedAtTime for {s} with the value of generatedAtTime for {following_se} in graph {graph_uri}.")
+            # logging.debug(f"Replaced the value of invalidatedAtTime for {s} with the value of generatedAtTime for {following_se} in graph {graph_uri}.")
 
     def fix_issue(self):
 
@@ -395,6 +395,7 @@ class FillerFixer(ProvenanceIssueFixer):
         # step 1: delete filler snapshots in the role of subjects
         self.batch_delete_filler_snapshots(to_fix)
 
+        logging.debug(f"Updating the graphs that had filler snapshots and the related resources in other graphs...")
         # step 2: delete filler snapshots in the role of objects and rename rename remaining snapshots
         for g, _dict in to_fix:
             mapping = self.map_se_names(_dict['to_delete'], _dict['remaining_snapshots'])
@@ -403,6 +404,8 @@ class FillerFixer(ProvenanceIssueFixer):
             # step 3: adapt values of prov:invalidatedAtTime for the entities existing now, identified by "new" URIs
             new_names = list(set(mapping.values()))
             self.adapt_invalidatedAtTime(g, new_names)
+        logging.debug(f"Fixing filler snapshots terminated successfully.")
+        
 
 
 
@@ -506,7 +509,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
             query = template.substitute(to_delete=to_delete_str, to_insert=to_insert_str)
 
             self._update(query)
-            logging.debug(f"Fixed datetime values for quads {i} to {len(batch)}.")
+            logging.debug(f"Fixed datetime values for quads {i} to {i+batch_size}.")
 
     def fix_issue(self):
 
@@ -605,7 +608,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
             query = template.substitute(quads=quads_str)
 
             self._update(query)
-            logging.debug(f"Inserted primary sources for creation snapshots {i} to {len(batch)}.")
+            logging.debug(f"Inserted primary sources for creation snapshots {i} to {i+batch_size}.")
     
     def fix_issue(self):
         
@@ -704,7 +707,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
             query = template.substitute(quads_to_delete=to_delete_str, quads_to_insert=to_insert_str)
 
             self._update(query)
-            logging.debug(f"Deleted triples with default processing agent from snapshots {i} to {len(batch)}.")
+            logging.debug(f"Deleted triples with default processing agent from snapshots {i} to {i+batch_size}.")
     
     def fix_issue(self):
 
@@ -891,7 +894,8 @@ class MultiObjectFixer(ProvenanceIssueFixer):
             
 
             self._update(query)
-            logging.debug(f"Overwritten {g} with new creation snapshot.")
+            # logging.debug(f"Overwritten {g} with new creation snapshot.")
+        logging.debug("Graph-resetting process terminated successfully.")
 
     def fix_issue(self):
         # step 0: detect graphs and snapshots with multiple objects for 1-cardinality properties
