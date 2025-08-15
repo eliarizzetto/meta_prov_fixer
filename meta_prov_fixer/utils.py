@@ -7,13 +7,74 @@ import tarfile
 import time
 import zipfile
 import lzma
-from typing import Generator, List, Literal, Union, Tuple
+from typing import Generator, List, Literal, Union, Tuple, Iterable, IO, Any, Optional
 from datetime import datetime, date, timezone
 from zoneinfo import ZoneInfo
 from urllib.parse import urlparse
 import warnings
 import functools
+import inspect
 
+def make_json_safe(obj):
+    if isinstance(obj, dict):
+        return {make_json_safe(k): make_json_safe(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple, set)):
+        return [make_json_safe(item) for item in obj]
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    elif hasattr(obj, '__dict__'):
+        return make_json_safe(vars(obj))
+    elif isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    else:
+        return str(obj)
+
+def get_process_paradata(instance):
+    """
+    Inspect caller frame to extract caller function name, argument names and values,
+    and instance attributes, then return a metadata dict.
+
+    Args:
+        instance: the instance (self) calling this function
+
+    Returns:
+        dict with timestamp, class, function, and input data, where args is a dict of param names to values.
+    """
+    frame = inspect.currentframe()
+    try:
+        outer_frame = frame.f_back
+        func_name = outer_frame.f_code.co_name
+
+        args_info = inspect.getargvalues(outer_frame)
+
+        # Build dictionary of argument name -> value, excluding 'self'
+        args_dict = {
+            arg: args_info.locals[arg]
+            for arg in args_info.args
+            if arg != 'self' and arg in args_info.locals
+        }
+
+        # kwargs, if available
+        kwargs = args_info.locals.get('kwargs', {})
+
+        safe_args = make_json_safe(args_dict)
+        safe_kwargs = make_json_safe(kwargs)
+        instance_attrs = make_json_safe(vars(instance))
+
+        data = {
+            "timestamp": datetime.now().isoformat(),
+            "class": instance.__class__.__name__,
+            "function": func_name,
+            "input": {
+                "instance_attributes": instance_attrs,
+                "args": safe_args,    # dict of arg name -> value
+                "kwargs": safe_kwargs,
+            }
+        }
+
+        return data
+    finally:
+        del frame
 
 def log_output_to_file(directory="prov_fix_logs", enabled=False):
     """
@@ -46,10 +107,10 @@ def log_output_to_file(directory="prov_fix_logs", enabled=False):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             # overwrite 'enabled' with self.log_results if it is specified for the instance
-            enabled = getattr(args[0], "log_results", False) if args else enabled 
+            _enabled = getattr(args[0], "log_results", enabled) if args else enabled 
             result = func(*args, **kwargs)
 
-            if enabled:
+            if _enabled:
                 cls_name = args[0].__class__.__name__ if args else "UnknownClass"
                 func_name = func.__name__
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -415,3 +476,71 @@ def validate_meta_dumps_pub_dates(meta_dumps_register:List[Tuple[str, str]]):
         parsed_url = urlparse(url)
         if not (parsed_url.scheme in ('http', 'https') and parsed_url.netloc):
             raise ValueError(f"[validate_meta_dumps_pub_dates]: Invalid URL at index {index}: {url}")
+
+
+def chunker(    
+    source: Union[str, IO, Iterable],
+    batch_size: int,
+    skip_first_line: bool = True,
+    start_line: int = 0,
+    checkpoint_file: Optional[str] = None
+) -> Generator[List[Any], None, None]:
+    """
+    Yield batches of Python objects from a file or iterable, with optional checkpoint tracking.
+
+    :param source: Path to a JSONL file, file-like object, or any iterable of objects.
+    :type source: str | IO | Iterable
+    :param batch_size: Number of items per batch.
+    :type batch_size: int
+    :param skip_first_line: Skip first line if reading from a file (useful for skipping metadata).
+    :type skip_first_line: bool
+    :param start_line: Line number to resume from (0-based, excluding skipped metadata line).
+    :type start_line: int
+    :param checkpoint_file: If provided, the function writes the last processed line number here after each batch.
+    :type checkpoint_file: Optional[str]
+    :yields: Tuple (batch, line_count), where batch is a list of objects and line_count is the last processed line number.
+    :rtype: Generator[Tuple[List[Any], int], None, None]
+    """
+    
+    def _chunk_iter(it: Iterable):
+        line_count = start_line
+        batch = []
+        for item in it:
+            batch.append(item)
+            line_count += 1
+            if len(batch) >= batch_size:
+                if checkpoint_file:
+                    with open(checkpoint_file, "w") as cp:
+                        cp.write(str(line_count))
+                yield batch, line_count
+                batch = []
+        if batch:
+            if checkpoint_file:
+                with open(checkpoint_file, "w") as cp:
+                    cp.write(str(line_count))
+            yield batch, line_count
+
+    if isinstance(source, str):
+        with open(source, "r", encoding="utf-8") as f:
+            if skip_first_line:
+                next(f, None)  # Skip metadata
+            # Skip already processed lines if resuming
+            for _ in range(start_line):
+                next(f, None)
+            parsed_iter = (json.loads(line) for line in f if line.strip())
+            yield from _chunk_iter(parsed_iter)
+
+    elif hasattr(source, "read"):
+        if skip_first_line:
+            next(source, None)
+        for _ in range(start_line):
+            next(source, None)
+        parsed_iter = (json.loads(line) for line in source if line.strip())
+        yield from _chunk_iter(parsed_iter)
+
+    else:
+        # Iterable
+        it = iter(source)
+        for _ in range(start_line):
+            next(it, None)
+        yield from _chunk_iter(it)

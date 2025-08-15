@@ -1,11 +1,12 @@
 import logging
 import time
-from typing import List, Tuple, Union, Dict, Set, Generator, Any
+from typing import List, Tuple, Union, Dict, Set, Generator, Any, Iterable
 from string import Template
 from SPARQLWrapper import SPARQLWrapper, JSON, POST
 from tqdm import tqdm
 from collections import defaultdict
 from datetime import date
+import os
 from meta_prov_fixer.utils import *
 
 # # OC Meta published RDF dumps publication dates and DOIs at the time of writing this code (2025-07-01).
@@ -22,7 +23,7 @@ from meta_prov_fixer.utils import *
 
 
 class ProvenanceIssueFixer:
-    def __init__(self, endpoint: str, log_results:bool=False):
+    def __init__(self, endpoint: str, issues_log_dir:Union[str, None]=None):
         """
         Base class for fixing provenance issues via SPARQL queries.
         Initializes the SPARQL endpoint and sets up the query method.
@@ -30,16 +31,23 @@ class ProvenanceIssueFixer:
         
         :param sparql_endpoint: The SPARQL endpoint URL.
         :type sparql_endpoint: str
-        :param log_results: If True, logs the results of the queries to a file inside 'prov_fix_logs' directory.
-        :type log_results: bool
+        :param issues_log_dir: If provided, the path to the directory where the data involved in a query-detected issue will be logged.
+        :type issues_log_fp: Union[str, None]
         """
 
         self.endpoint = endpoint
         self.sparql = SPARQLWrapper(self.endpoint)
         self.sparql.setReturnFormat(JSON)
         self.sparql.setMethod(POST)
-        self.log_results = log_results
+        if issues_log_dir:
+            self.issues_log_fp = os.path.join(issues_log_dir, f"{type(self).__qualname__}_{time.strftime('%Y%m%d_%H%M%S')}.jsonl")
+        else:
+            self.issues_log_fp = None
 
+        if self.issues_log_fp:
+            if os.path.exists(self.issues_log_fp):
+                logging.warning(f"The issues log file {self.issues_log_fp} already exists. It will be overwritten.")
+            os.makedirs(os.path.dirname(self.issues_log_fp), exist_ok=True)
 
     def _query(self, query: str, retries: int = 3, delay: float = 2.0) -> Union[dict, None]:
         for attempt in range(retries):
@@ -114,10 +122,9 @@ class FillerFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to filler snapshots in the OpenCitations Meta graph.
     """
-    def __init__(self, endpoint: str, log_results:bool=False):
-        super().__init__(endpoint, log_results=log_results)
+    def __init__(self, endpoint: str, issues_log_dir:Union[str, None]=None):
+        super().__init__(endpoint, issues_log_dir=issues_log_dir)
 
-    @log_output_to_file()
     def detect_issue(self, limit=10000) -> List[Tuple[str, Dict[str, Set[str]]]]:
         """
         Fetch snapshots that are fillers and need to be deleted, grouped by their named graph.
@@ -161,25 +168,39 @@ class FillerFixer(ProvenanceIssueFixer):
         OFFSET %d
         LIMIT %d
         """
-        # Pagination loop
-        logging.debug("Fetching filler snapshots (to be deleted) with pagination...")
-        for current_bindings in self._paginate_query(template, limit):
-            # group query results
-            for b in current_bindings:
-                g = b['g']['value']
-                snapshot = b['snapshot']['value']
-                other_se = b['other_se']['value']
-                
-                grouped_result[g]['to_delete'].add(snapshot)
-                grouped_result[g]['remaining_snapshots'].add(other_se)
-                # the following is necessary when there are multiple filler snapshots in the same graph
-                grouped_result[g]['remaining_snapshots'].difference_update(grouped_result[g]['to_delete'])
+        paradata = get_process_paradata(self)
+        if self.issues_log_fp:
+            res_log = open(self.issues_log_fp, 'w', encoding='utf-8')
+            res_log.write(json.dumps(paradata, ensure_ascii=False) + '\n')
+        else:
+            logging.info(paradata)
+        try:
+            # Pagination loop
+            logging.debug("Fetching filler snapshots (to be deleted) with pagination...")
+            for current_bindings in self._paginate_query(template, limit):
+                # group query results
+                for b in current_bindings:
+                    g = b['g']['value']
+                    snapshot = b['snapshot']['value']
+                    other_se = b['other_se']['value']
+                    
+                    grouped_result[g]['to_delete'].add(snapshot)
+                    grouped_result[g]['remaining_snapshots'].add(other_se)
+                    # the following is necessary when there are multiple filler snapshots in the same graph
+                    grouped_result[g]['remaining_snapshots'].difference_update(grouped_result[g]['to_delete'])
 
+            logging.info(f"{sum([len(d['to_delete']) for d in grouped_result.values()])} snapshots marked for deletion.")
+            if self.issues_log_fp:
+                for obj in list(dict(grouped_result).items()):
+                    obj = make_json_safe(obj)
+                    res_log.write(json.dumps(obj, ensure_ascii=False) + '\n')
 
-        logging.info(f"{sum([len(d['to_delete']) for d in grouped_result.values()])} snapshots marked for deletion.")
-        return list(dict(grouped_result).items())
+        finally:
+            if self.issues_log_fp:
+                res_log.close()
+        return list(dict(grouped_result).items()) if not self.issues_log_fp else None
 
-    def batch_delete_filler_snapshots(self, deletions: List[Tuple[str, Dict[str, Set[str]]]], batch_size=500) -> None:
+    def batch_delete_filler_snapshots(self, deletions: Union[str, List[Tuple[str, Dict[str, Set[str]]]]], batch_size=500) -> None:
         """
         Deletes snapshots from the triplestore based on the provided deletions dictionary.
         :param deletions: A list of tuples where the first element is a graph URI,  and the second is a dictionary with 'to_delete' and 'remaining_snapshots' sets.
@@ -191,19 +212,25 @@ class FillerFixer(ProvenanceIssueFixer):
         """)
 
         logging.debug("Deleting filler snapshots in batches...")
-        for i in range(0, len(deletions), batch_size):
-            batch = deletions[i:i + batch_size]
-            dels = []
-            for g_uri, values in batch:
-                for se_to_delete in values['to_delete']:
-                    single_del = f"DELETE WHERE {{ GRAPH <{g_uri}> {{ <{se_to_delete}> ?p ?o . }}}};\n"
-                    dels.append(single_del)
-            dels_str = "    ".join(dels)
+        for batch, line_num in chunker(deletions, batch_size):
+            try:
+                dels = []
+                for g_uri, values in batch:
+                    for se_to_delete in values['to_delete']:
+                        single_del = f"DELETE WHERE {{ GRAPH <{g_uri}> {{ <{se_to_delete}> ?p ?o . }}}};\n"
+                        dels.append(single_del)
+                dels_str = "    ".join(dels)
 
-            query = template.substitute(dels=dels_str)
+                query = template.substitute(dels=dels_str)
 
-            self._update(query)
-            logging.debug(f"Deleted triples of filler snapshots in graphs {i} to {i+batch_size}.")
+                self._update(query)
+                logging.debug(f"Deleted triples of filler snapshots in graphs {line_num-batch_size} to {line_num}.")
+            except Exception as e:
+                logging.error(f"Error while deleting filler snapshots {line_num-batch_size} to {line_num}: {e}")
+                print(f"Error while deleting filler snapshots {line_num-batch_size} to {line_num}: {e}")
+                raise e
+        return None
+
 
     @staticmethod
     def map_se_names(to_delete:set, remaining: set) -> dict:
@@ -390,24 +417,34 @@ class FillerFixer(ProvenanceIssueFixer):
     def fix_issue(self):
 
         # step 0: detect filler snapshots
-        to_fix = self.detect_issue()
+        if not self.issues_log_fp:
+            to_fix = self.detect_issue() # keep all the issues in memory
+        else:
+            self.detect_issue() # writes all issues to self.issues_log_fp
 
         # step 1: delete filler snapshots in the role of subjects
-        self.batch_delete_filler_snapshots(to_fix)
+        if not self.issues_log_fp:
+            self.batch_delete_filler_snapshots(to_fix)
+        else:
+            self.batch_delete_filler_snapshots(self.issues_log_fp)
 
         logging.debug(f"Updating the graphs that had filler snapshots and the related resources in other graphs...")
-        # step 2: delete filler snapshots in the role of objects and rename rename remaining snapshots
-        for g, _dict in to_fix:
-            mapping = self.map_se_names(_dict['to_delete'], _dict['remaining_snapshots'])
-            self.rename_snapshots(mapping)
 
-            # step 3: adapt values of prov:invalidatedAtTime for the entities existing now, identified by "new" URIs
-            new_names = list(set(mapping.values()))
-            self.adapt_invalidatedAtTime(g, new_names)
+        if not self.issues_log_fp:
+            stream = to_fix
+        else:
+            stream = self.issues_log_fp
+
+        for batch, line_num in chunker(stream, 500):  # following update operations are executed always line-by-line 
+            # step 2: delete filler snapshots in the role of objects and rename rename remaining snapshots
+            for g, _dict in batch:
+                mapping = self.map_se_names(_dict['to_delete'], _dict['remaining_snapshots'])
+                self.rename_snapshots(mapping)
+
+                # step 3: adapt values of prov:invalidatedAtTime for the entities existing now, identified by "new" URIs
+                new_names = list(set(mapping.values()))
+                self.adapt_invalidatedAtTime(g, new_names)
         logging.debug(f"Fixing filler snapshots terminated successfully.")
-        
-
-
 
     
 # (2) DATETIME values correction -> move in daughter class DateTimeFixer
@@ -416,10 +453,9 @@ class DateTimeFixer(ProvenanceIssueFixer):
     A class to fix issues related to ill-formed datetime values in the OpenCitations Meta graph.
     This class provides methods to fetch quads with ill-formed datetime values, correct them, and batch fix them in the triplestore.
     """
-    def __init__(self, endpoint: str, log_results:bool=False):
-        super().__init__(endpoint, log_results=log_results)
+    def __init__(self, endpoint: str, issues_log_dir:Union[str, None]=None):
+        super().__init__(endpoint, issues_log_dir=issues_log_dir)
     
-    @log_output_to_file()
     def detect_issue(self, limit=1000000) -> List[Tuple[str]]:
         """
         Fetch all quads where the datetime object value is not syntactically correct or complete, including cases where
@@ -432,6 +468,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
         :rtype: List[Tuple[str, str, str, str]]
         """
         result = []
+        counter = 0
 
         template = r'''
         PREFIX prov: <http://www.w3.org/ns/prov#>
@@ -452,22 +489,42 @@ class DateTimeFixer(ProvenanceIssueFixer):
         OFFSET %d
         LIMIT %d
         '''
-        # Pagination loop
-        logging.debug("Fetching ill-formed datetime values with pagination...")
-        for current_bindings in self._paginate_query(template, limit):
-            # group query results
-            for b in current_bindings:
-                g = b['g']['value']
-                s = b['s']['value']
-                p = b['p']['value']
-                dt = b['dt']['value']
-                
-                result.append((g, s, p, dt))
+        paradata = get_process_paradata(self)
+        if self.issues_log_fp:
+            res_log = open(self.issues_log_fp, 'w', encoding='utf-8')
+            res_log.write(json.dumps(paradata, ensure_ascii=False) + '\n')
+        else:
+            logging.info(paradata)
+        
+        try:
+            # Pagination loop
+            logging.debug("Fetching ill-formed datetime values with pagination...")
+            for current_bindings in self._paginate_query(template, limit):
+                # group query results
+                for b in current_bindings:
+                    g = b['g']['value']
+                    s = b['s']['value']
+                    p = b['p']['value']
+                    dt = b['dt']['value']
+                    
+                    counter +=1
+                    out_row = (g, s, p, dt)
 
-        logging.info(f"Fetched {len(result)} quads with a badly formed datetime object value.")
-        return result
-    
-    def batch_fix_illformed_datetimes(self, quads: list, batch_size=500):
+                    if not self.issues_log_fp:
+                        result.append(out_row)
+                    else:
+                        out_row = make_json_safe(out_row)
+                        res_log.write(json.dumps(out_row, ensure_ascii=False) + '\n')
+
+            logging.info(f"Fetched {counter} quads with a badly formed datetime object value.")
+        
+        finally:
+            if self.issues_log_fp:
+                res_log.close()
+
+        return result if not self.issues_log_fp else None  # if issues_log_fp is provided, the results are logged to the file and not returned
+
+    def batch_fix_illformed_datetimes(self, quads: Union[list, str], batch_size=500) -> None:
         """
         Replace the datetime object of each quad in ``quads`` with its correct version (offset-aware and without microseconds).
         Note that ``xsd:dateTime`` is always made explicit in newly inserted values.
@@ -476,8 +533,8 @@ class DateTimeFixer(ProvenanceIssueFixer):
            If a snapshot has multiple objects for ``prov:invalidatedAtTime`` or ``prov:generatedAtTime`` (though this should never 
            be the case), they all get deleted and replaced with a single, correct, value.
 
-        :param quads: List of quads to fix.
-        :type quads: list
+        :param quads: List of quads to fix (in memory) or a path to a file containing quads in JSON Lines format.
+        :type quads: Union[list, str]
         :param batch_size: Number of quads to process per batch.
         :type batch_size: int
         :returns: None
@@ -494,60 +551,72 @@ class DateTimeFixer(ProvenanceIssueFixer):
         }
         ''')
 
-        for i in range(0, len(quads), batch_size):
-            batch = quads[i:i + batch_size]
-            to_delete = []
-            to_insert = []
-            for g, s, p, dt in batch:
+        # for i in range(0, len(quads), batch_size):
+        #     batch = quads[i:i + batch_size]
+        for batch, line_num in chunker(quads, batch_size):
+            try:
+                to_delete = []
+                to_insert = []
+                for g, s, p, dt in batch:
+                    
+                    to_delete.append(f'GRAPH <{g}> {{ <{s}> <{p}> "{dt}"^^xsd:dateTime . }}\n')
+                    correct_dt = normalise_datetime(dt)
+                    to_insert.append(f'GRAPH <{g}> {{ <{s}> <{p}> "{correct_dt}"^^xsd:dateTime . }}\n')
                 
-                to_delete.append(f'GRAPH <{g}> {{ <{s}> <{p}> "{dt}"^^xsd:dateTime . }}\n')
-                correct_dt = normalise_datetime(dt)
-                to_insert.append(f'GRAPH <{g}> {{ <{s}> <{p}> "{correct_dt}"^^xsd:dateTime . }}\n')
-            
-            to_delete_str = "  ".join(to_delete)
-            to_insert_str = "  ".join(to_insert)
-            query = template.substitute(to_delete=to_delete_str, to_insert=to_insert_str)
+                to_delete_str = "  ".join(to_delete)
+                to_insert_str = "  ".join(to_insert)
+                query = template.substitute(to_delete=to_delete_str, to_insert=to_insert_str)
 
-            self._update(query)
-            logging.debug(f"Fixed datetime values for quads {i} to {i+batch_size}.")
+                self._update(query)
+                logging.debug(f"Fixed datetime values for quads {line_num-batch_size} to {line_num}.")
 
+            except Exception as e:
+                logging.error(f"Error while fixing datetime values for quads {line_num-batch_size} to {line_num}: {e}")
+                print(f"Error while fixing datetime values for quads {line_num-batch_size} to {line_num}: {e}")
+                raise e
+        return None
+    
     def fix_issue(self):
 
         # step 0: detect ill-formed datetime values
-        to_fix = self.detect_issue()
+        if not self.issues_log_fp:
+            to_fix = self.detect_issue() # keep all the issues in memory
+        else:
+            self.detect_issue() # writes all issues to self.issues_log_fp
 
         # step 1:
-        self.batch_fix_illformed_datetimes(to_fix)
+        if not self.issues_log_fp:
+            self.batch_fix_illformed_datetimes(to_fix)
+        else:
+            self.batch_fix_illformed_datetimes(self.issues_log_fp)
 
 # (3) correct creation snapshots without primary source -> move to daughter class MissingPrimSourceFixer
 class MissingPrimSourceFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to creation snapshots that do not have a primary source in the OpenCitations Meta graph.
     """
-    def __init__(self, endpoint: str, meta_dumps_pub_dates: List[Tuple[str, str]], log_results:bool=False):
+    def __init__(self, endpoint: str, meta_dumps_pub_dates: List[Tuple[str, str]], issues_log_dir:Union[str, None]=None):
         """
         :param endpoint: The SPARQL endpoint URL.
         :type endpoint: str
         :param meta_dumps_pub_dates: Register of published OpenCitations Meta dumps, in the form: [(<ISO format date 1>, <dump DOI1>), (<ISO format date 2>, <dump DOI2>), ...]
         :type meta_dumps_pub_dates: List[Tuple[str, str]]
-        :param log_results: If True, logs the results of the queries to a file inside 'prov_fix_logs' directory.
-        :type log_results: bool
         """
-        super().__init__(endpoint, log_results=log_results)
+        super().__init__(endpoint, issues_log_dir=issues_log_dir)
         validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
         self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
     
-    @log_output_to_file()
-    def detect_issue(self, limit=10000) -> List[Tuple[str, str]]:
+    def detect_issue(self, limit=10000) -> Union[str, List[Tuple[str, str]]]:
         """
         Fetch creation snapshots that do not have a primary source.
 
         :param limit: The number of results to fetch per page.
         :type limit: int
         :returns: A list of tuples with snapshot URI and generation time.
-        :rtype: List[Tuple[str, str]]
+        :rtype: Union[str, List[Tuple[str, str]]]
         """
         results = []
+        counter = 0
 
         template = """
         PREFIX prov: <http://www.w3.org/ns/prov#>
@@ -569,23 +638,42 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
         LIMIT %d
         """
 
+        paradata = get_process_paradata(self)
+        if self.issues_log_fp:
+            res_log = open(self.issues_log_fp, 'w', encoding='utf-8')
+            res_log.write(json.dumps(paradata, ensure_ascii=False) + '\n')
+        else:
+            logging.info(paradata)
+
         # Pagination loop
         logging.debug("Fetching creation snapshots without a primary source with pagination...")
-        for current_bindings in self._paginate_query(template, limit):
-            for b in current_bindings:
-                s = b["s"]["value"]
-                gen_time = b["genTime"]["value"]
-                results.append((s, gen_time))
-        
-        logging.info(f"Found {len(results)} creation snapshots without a primary source.")
-        return results # (<snapshot uri>, <gen. time>)
+        try:
+            for current_bindings in self._paginate_query(template, limit):
+                for b in current_bindings:
+                    s = b["s"]["value"]
+                    gen_time = b["genTime"]["value"]
+                    # results.append((s, gen_time))
+                    counter +=1
+                    out_row = (s, gen_time)
+
+                    if not self.issues_log_fp:
+                        results.append(out_row)
+                    else:
+                        out_row = make_json_safe(out_row)
+                        res_log.write(json.dumps(out_row, ensure_ascii=False) + '\n')
+            
+            logging.info(f"Found {counter} creation snapshots without a primary source.")
+        finally:
+            if self.issues_log_fp:
+                res_log.close()
+        return results if not self.issues_log_fp else None  # (<snapshot uri>, <gen. time>)
     
-    def batch_insert_missing_primsource(self, creations_to_fix: List[Tuple[str, str]], batch_size=500):
+    def batch_insert_missing_primsource(self, creations_to_fix: Union[str, List[Tuple[str, str]]], batch_size=500):
         """
         Insert primary sources for creation snapshots that do not have one, in batches.
 
         :param creations_to_fix: A list of tuples where each tuple contains the snapshot URI and the generation time, representing all the creation snapshots that must be fixed.
-        :type creations_to_fix: List[Tuple[str, str]]
+        :type creations_to_fix: Union[str, List[Tuple[str, str]]]
         :param batch_size: The number of snapshots to process in each batch.
         :type batch_size: int
         :returns: None
@@ -597,26 +685,41 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
             $quads
         }
         """)
-        for i in range(0, len(creations_to_fix), batch_size):
-            batch = creations_to_fix[i:i + batch_size]
-            quads = []
-            for snapshot_uri, gen_time in batch:
-                prim_source_uri = get_previous_meta_dump_uri(self.meta_dumps_pub_dates, gen_time)
-                graph_uri = get_graph_uri_from_se_uri(snapshot_uri)
-                quads.append(f"GRAPH <{graph_uri}> {{ <{snapshot_uri}> prov:hadPrimarySource <{prim_source_uri}> . }}\n")
-            quads_str = "    ".join(quads)
-            query = template.substitute(quads=quads_str)
+        # for i in range(0, len(creations_to_fix), batch_size):
+        #     batch = creations_to_fix[i:i + batch_size]
+        for batch, line_num in chunker(creations_to_fix, batch_size):
+            try:
+                quads = []
+                for snapshot_uri, gen_time in batch:
+                    prim_source_uri = get_previous_meta_dump_uri(self.meta_dumps_pub_dates, gen_time)
+                    graph_uri = get_graph_uri_from_se_uri(snapshot_uri)
+                    quads.append(f"GRAPH <{graph_uri}> {{ <{snapshot_uri}> prov:hadPrimarySource <{prim_source_uri}> . }}\n")
+                quads_str = "    ".join(quads)
+                query = template.substitute(quads=quads_str)
 
-            self._update(query)
-            logging.debug(f"Inserted primary sources for creation snapshots {i} to {i+batch_size}.")
+                self._update(query)
+                logging.debug(f"Inserted primary sources for creation snapshots {line_num-batch_size} to {line_num}.")
+            except Exception as e:
+                logging.error(f"Error while fixing multiple primary source in snapshots {line_num-batch_size} to {line_num}: {e}")
+                print(f"Error while fixing multiple primary source in snapshots {line_num-batch_size} to {line_num}: {e}")
+                raise e
+        return None
+        
+
     
     def fix_issue(self):
         
         # step 0: detect creation snapshots missing a primary source
-        to_fix = self.detect_issue()
+        if not self.issues_log_fp:
+            to_fix = self.detect_issue()
+        else:
+            self.detect_issue()
 
         # step 1: insert primary source for the snapshots
-        self.batch_insert_missing_primsource(to_fix)
+        if not self.issues_log_fp:
+            self.batch_insert_missing_primsource(to_fix)
+        else:
+            self.batch_insert_missing_primsource(self.issues_log_fp)
                 
 
 # TODO: (4) Correct snapshots with multiple objects for prov:wasAttributedTo -> move in daughter class MultiPAFixer
@@ -624,10 +727,9 @@ class MultiPAFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to snapshots that have multiple objects for the ``prov:wasAttributedTo`` property in the OpenCitations Meta graph.
     """
-    def __init__(self, endpoint: str, log_results:bool=False):
-        super().__init__(endpoint, log_results=log_results)
+    def __init__(self, endpoint: str, issues_log_dir:Union[str, None]=None):
+        super().__init__(endpoint, issues_log_dir=issues_log_dir)
 
-    @log_output_to_file()
     def detect_issue(self, limit=10000):
         """
         Fetch graph-snapshot pairs where the snapshot has more than one object for the ``prov:wasAttributedTo`` property.
@@ -638,6 +740,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
         :rtype: List[Tuple[str, str]]
         """
         result = []
+        counter = 0
 
         template = """
         PREFIX prov: <http://www.w3.org/ns/prov#>
@@ -662,22 +765,41 @@ class MultiPAFixer(ProvenanceIssueFixer):
         OFFSET %d
         LIMIT %d
         """
+        paradata = get_process_paradata(self)
+        if self.issues_log_fp:
+            res_log = open(self.issues_log_fp, 'w', encoding='utf-8')
+            res_log.write(json.dumps(paradata, ensure_ascii=False) + '\n')
+        else:
+            logging.info(paradata)
 
         logging.debug("Fetching snapshots with multiple objects for prov:wasAttributedTo...")
-        for current_bindings in self._paginate_query(template, limit):
-            for b in current_bindings:
-                g = b['g']['value']
-                s = b['s']['value']
-                result.append((g, s))
-        logging.info(f"Found {len(result)} snapshots with multiple objects for prov:wasAttributedTo.")
-        return result
+        try:
+            for current_bindings in self._paginate_query(template, limit):
+                for b in current_bindings:
+                    g = b['g']['value']
+                    s = b['s']['value']
+                    # result.append((g, s))
+                    counter +=1
+                    out_row = (g, s)
 
-    def batch_fix_extra_pa(self, multi_pa_snapshots:List[Tuple[str]], batch_size=500):
+                    if not self.issues_log_fp:
+                        result.append(out_row)
+                    else:
+                        out_row = make_json_safe(out_row)
+                        res_log.write(json.dumps(out_row, ensure_ascii=False) + '\n')
+            logging.info(f"Found {counter} snapshots with multiple objects for prov:wasAttributedTo.")
+        finally:
+            if self.issues_log_fp:
+                res_log.close()
+        return result if not self.issues_log_fp else None 
+    
+
+    def batch_fix_extra_pa(self, multi_pa_snapshots:Union[str, List[Tuple[str]]], batch_size=500):
         """
         Delete triples where the value of ``prov:wasAttributedTo`` is <https://w3id.org/oc/meta/prov/pa/1> if there is at least another processing agent for the same snapshot subject.
 
         :param multi_pa_snapshots: A list of tuples where each tuple contains a graph URI and a snapshot URI.
-        :type multi_pa_snapshots: List[Tuple[str, str]]
+        :type multi_pa_snapshots: Union[str, List[Tuple[str]]]
         :param batch_size: Number of snapshots to process per batch.
         :type batch_size: int
         :returns: None
@@ -694,28 +816,39 @@ class MultiPAFixer(ProvenanceIssueFixer):
         }
         """)
 
-        for i in range(0, len(multi_pa_snapshots), batch_size):
-            batch = multi_pa_snapshots[i:i + batch_size]
-            to_delete = []
-            to_insert = []
-            for g, s in batch:
-                to_delete.append(f"GRAPH <{g}> {{ <{s}> prov:wasAttributedTo ?o . }}\n")
-                to_insert.append(f"GRAPH <{g}> {{ <{s}> prov:wasAttributedTo <https://w3id.org/oc/meta/prov/pa/2> . }}\n")
+        for batch, line_num in chunker(multi_pa_snapshots, batch_size):
+            try:
+                to_delete = []
+                to_insert = []
+                for g, s in batch:
+                    to_delete.append(f"GRAPH <{g}> {{ <{s}> prov:wasAttributedTo ?o . }}\n")
+                    to_insert.append(f"GRAPH <{g}> {{ <{s}> prov:wasAttributedTo <https://w3id.org/oc/meta/prov/pa/2> . }}\n")
 
-            to_delete_str = "  ".join(to_delete)
-            to_insert_str = "  ".join(to_insert)
-            query = template.substitute(quads_to_delete=to_delete_str, quads_to_insert=to_insert_str)
+                to_delete_str = "  ".join(to_delete)
+                to_insert_str = "  ".join(to_insert)
+                query = template.substitute(quads_to_delete=to_delete_str, quads_to_insert=to_insert_str)
 
-            self._update(query)
-            logging.debug(f"Deleted triples with default processing agent from snapshots {i} to {i+batch_size}.")
+                self._update(query)
+                logging.debug(f"Deleted triples with default processing agent from snapshots {line_num-batch_size} to {line_num}.")
+            except Exception as e:
+                logging.error(f"Error while fixing multiple processing agents in snapshots {line_num-batch_size} to {line_num}: {e}")
+                print(f"Error while fixing multiple processing agents in snapshots {line_num-batch_size} to {line_num}: {e}")
+                raise e
+        return None
     
     def fix_issue(self):
 
         # step 0: detect graph and snapshots that have an additional object besides the typical <https://w3id.org/oc/meta/prov/pa/1> for prov:wasAttributedTo
-        to_fix = self.detect_issue()
+        if not self.issues_log_fp:
+            to_fix = self.detect_issue()
+        else:
+            self.detect_issue()
 
         # step 1: delete all objects for prov:wasAttributedTo and insert only <https://w3id.org/oc/meta/prov/pa/2>
-        self.batch_fix_extra_pa(to_fix)
+        if not self.issues_log_fp:
+            self.batch_fix_extra_pa(to_fix)
+        else:
+            self.batch_fix_extra_pa(self.issues_log_fp)
 
 
 # (5) Correct graphs where at least one snapshots has too many objects for specific properties -> move to daughter class MultiObjectFixer
@@ -723,18 +856,17 @@ class MultiObjectFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to graphs where at least one snapshot has too many objects for specific properties in the OpenCitations Meta graph.
     """
-    def __init__(self, endpoint:str, meta_dumps_pub_dates: List[Tuple[str, str]], log_results:bool=False):
+    def __init__(self, endpoint:str, meta_dumps_pub_dates: List[Tuple[str, str]], issues_log_dir:Union[str, None]=None):
         """
         :param meta_dumps_pub_dates: Register of published OpenCitations Meta dumps, in the form: [(<ISO format date 1>, <dump DOI1>), (<ISO format date 2>, <dump DOI2>), ...]
         :type meta_dumps_pub_dates: List[Tuple[str, str]]
         """
-        super().__init__(endpoint, log_results=log_results)
+        super().__init__(endpoint, issues_log_dir=issues_log_dir)
         self.pa_uri = "https://w3id.org/oc/meta/prov/pa/1" # URI of the processing agent to be used as objects of prov:wasAtttributedTo for newly created snapshots, which is always the default one
         validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
         self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
     
-    @log_output_to_file()
-    def detect_issue(self, limit=10000) -> List[str]:
+    def detect_issue(self, limit=10000) -> Union[None, List[str]]:
         """
         Fetch graphs containing at least one snapshot with multiple objects for 
         a property that only admits one (e.g. ``oc:hasUpdateQuery``).
@@ -742,9 +874,10 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         :param limit: The number of results to fetch per page.
         :type limit: int
         :returns: A list of tuples (graph URI, generation time).
-        :rtype: List[Tuple[str, str]]
+        :rtype: Union[None, List[str]]
         """
         output = []
+        counter = 0
 
         template = """
         PREFIX prov: <http://www.w3.org/ns/prov#>
@@ -773,18 +906,34 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         OFFSET %d
         LIMIT %d
         """
+        paradata = get_process_paradata(self)
+        if self.issues_log_fp:
+            res_log = open(self.issues_log_fp, 'w', encoding='utf-8')
+            res_log.write(json.dumps(paradata, ensure_ascii=False) + '\n')
+        else:
+            logging.info(paradata)
+
 
         logging.debug("Fetching URIs of graphs containing snapshots with too many objects...")
-        for current_bindings in self._paginate_query(template, limit):
-            for b in current_bindings:
-                g = b['g']['value']
-                gen_time = b['genTime']['value']
-                output.append((g, gen_time))
-        
-        logging.info(f"Found {len(output)} distinct graphs containing snapshots with too many objects for some properties.")
-        return output
+        try:
+            for current_bindings in self._paginate_query(template, limit):
+                for b in current_bindings:
+                    g = b['g']['value']
+                    gen_time = b['genTime']['value']
+                    counter += 1
+                    out_row = (g, gen_time)
+                    if not self.issues_log_fp:
+                        output.append(out_row)
+                    else:
+                        out_row = make_json_safe(out_row)
+                        self.issues_log_fp.write(json.dumps(out_row, ensure_ascii=False) + '\n')
+            logging.info(f"Found {counter} distinct graphs containing snapshots with too many objects for some properties.")
+        finally:
+            if self.issues_log_fp:
+                res_log.close()
+        return output if not self.issues_log_fp else None 
     
-    def reset_multi_object_graphs(self, graphs:list):
+    def reset_multi_object_graphs(self, graphs:Union[str, list]):
         """
         Reset each graph in ``graphs`` by deleting the existing snapshots and creating a new 
         creation snapshot, which will be the only one left for that graph.
@@ -874,42 +1023,58 @@ class MultiObjectFixer(ProvenanceIssueFixer):
 
         logging.debug("Resetting graphs with too many objects by creating a new single creation snapshot...")
 
-        for g, gen_time in tqdm(graphs, desc='Overwriting graphs with too many objects for certain properties...'):
-            creation_se = g + 'se/1'
-            gen_time = gen_time.replace("^^xsd:dateTime", "") 
-            gen_time = gen_time.replace("^^http://www.w3.org/2001/XMLSchema#dateTime", "")
-            prim_source = get_previous_meta_dump_uri(self.meta_dumps_pub_dates, gen_time)
-            processing_agent = self.pa_uri 
-            referent = get_described_res_omid(g)
-            desc = f"The entity '{referent}' has been created."
 
-            query = template.substitute(
-                graph = g,
-                creation_snapshot = creation_se,
-                primary_source = prim_source, 
-                processing_agent = processing_agent,
-                specialization_of = referent, 
-                description = desc
-            )
-            
+        batch_size = 500  # updates are executed with individual queries anyway
 
-            self._update(query)
-            # logging.debug(f"Overwritten {g} with new creation snapshot.")
-        logging.debug("Graph-resetting process terminated successfully.")
+        for batch, line_num in chunker(graphs, 500):
+            try:
+                for g, gen_time in batch:
+                    creation_se = g + 'se/1'
+                    gen_time = gen_time.replace("^^xsd:dateTime", "") 
+                    gen_time = gen_time.replace("^^http://www.w3.org/2001/XMLSchema#dateTime", "")
+                    prim_source = get_previous_meta_dump_uri(self.meta_dumps_pub_dates, gen_time)
+                    processing_agent = self.pa_uri 
+                    referent = get_described_res_omid(g)
+                    desc = f"The entity '{referent}' has been created."
+
+                    query = template.substitute(
+                        graph = g,
+                        creation_snapshot = creation_se,
+                        primary_source = prim_source, 
+                        processing_agent = processing_agent,
+                        specialization_of = referent, 
+                        description = desc
+                    )
+                    
+
+                    self._update(query)
+                    logging.debug(f"Reset with new creation snapshots graphs from {line_num-batch_size} to {line_num}.")
+            except Exception as e:
+                logging.error(f"Error while resetting graphs {line_num-batch_size} to {line_num}: {e}")
+                print(f"Error while resetting graphs {line_num-batch_size} to {line_num}: {e}")
+                raise e
+            logging.debug("Graph-resetting process terminated successfully.")
+        return None
 
     def fix_issue(self):
         # step 0: detect graphs and snapshots with multiple objects for 1-cardinality properties
-        to_fix = self.detect_issue()
+        if not self.issues_log_fp:
+            to_fix = self.detect_issue()
+        else:
+            self.detect_issue()
 
         # step 1: reset graphs with a snapshot having extra objects
-        self.reset_multi_object_graphs(to_fix)
+        if not self.issues_log_fp:
+            self.reset_multi_object_graphs(to_fix)
+        else:
+            self.reset_multi_object_graphs(self.issues_log_fp)
 
 
 
 def fix_process(
         endpoint: str,
         meta_dumps_pub_dates: List[Tuple[str, str]],
-        log_results = False,
+        issues_log_dir: Union[str, None] = None,
         dry_run: bool = False
     ):
     """
@@ -917,35 +1082,40 @@ def fix_process(
     """
     
     # (1) Fix filler snapshots
-    ff = FillerFixer(endpoint, log_results=log_results)
+    ff = FillerFixer(endpoint, issues_log_dir=issues_log_dir)
+    logging.info(f'Created instance of {ff.__class__.__qualname__}.')
     if not dry_run:
         ff.fix_issue()
     else:
         logging.debug("[fix_process]: Would delete filler snapshots and update related graphs.")
 
     # (2) Fix DateTime values: DateTimeFixer
-    dtf = DateTimeFixer(endpoint, log_results=log_results)
+    dtf = DateTimeFixer(endpoint, issues_log_dir=issues_log_dir)
+    logging.info(f'Created instance of {dtf.__class__.__qualname__}.')
     if not dry_run:
         dtf.fix_issue()
     else: 
         logging.debug("[fix_process]: Would update invalid datetime values.")
 
     # (3) Fix creation snapshots without primary source
-    mpsf = MissingPrimSourceFixer(endpoint, meta_dumps_pub_dates, log_results=log_results)
+    mpsf = MissingPrimSourceFixer(endpoint, meta_dumps_pub_dates, issues_log_dir=issues_log_dir)
+    logging.info(f'Created instance of {mpsf.__class__.__qualname__}.')
     if not dry_run:
         mpsf.fix_issue()
     else:
         logging.debug("[fix_process]: Would insert a primary source for snapshots lacking a value for this ")
 
     # (4) Fix snapshots with multiple objects for prov:wasAttributedTo
-    mpaf = MultiPAFixer(endpoint, log_results=log_results)
+    mpaf = MultiPAFixer(endpoint, issues_log_dir=issues_log_dir)
+    logging.info(f'Created instance of {mpaf.__class__.__qualname__}.')
     if not dry_run:
         mpaf.fix_issue()
     else:
         logging.debug("[fix_process]: Would remove extra values for prov:wasAttributedTo.")
 
     # (5) Fix graphs with too many objects for specific properties
-    mof = MultiObjectFixer(endpoint, meta_dumps_pub_dates, log_results=log_results)
+    mof = MultiObjectFixer(endpoint, meta_dumps_pub_dates, issues_log_dir=issues_log_dir)
+    logging.info(f'Created instance of {mof.__class__.__qualname__}.')
     if not dry_run:
         mof.fix_issue()
     else:
