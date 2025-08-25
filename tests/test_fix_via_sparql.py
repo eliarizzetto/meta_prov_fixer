@@ -9,6 +9,8 @@ from meta_prov_fixer.fix_via_sparql import *
 from pprint import pprint
 from datetime import datetime
 from rdflib.compare import isomorphic, graph_diff
+import os
+import glob
 
 
 meta_dumps_pub_dates = [
@@ -477,6 +479,14 @@ class TestFixProcess(unittest.TestCase):
         self.local_query = local_query
         self.local_update = local_update
         self.maxDiff = None
+
+    def tearDown(self):
+        log_dir = 'tests/data/fix_process_log'
+        for f in glob.glob(os.path.join(log_dir, '*')):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
     
     def normalize_datetime_literals(self, serialized: str) -> str:
         """Normalizes datetime literals by converting +00:00 to Z (for test comparison)."""
