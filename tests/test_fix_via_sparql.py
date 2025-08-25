@@ -94,7 +94,6 @@ class TestFillerFixer(unittest.TestCase):
         # Run the method that would internally call self.fixer._query(...)
         mocked_res = self.fixer.detect_issue()
 
-        # Assertions based on expected behavior/output
         self.assertIsInstance(mocked_res, list)
         self.assertEqual(len(mocked_res), 2)
         self.assertTrue(all(isinstance(item, tuple) and len(item) == 2 for item in mocked_res))
@@ -230,7 +229,6 @@ class TestDateTimeFixer(unittest.TestCase):
 
         mocked_res = self.fixer.detect_issue()
 
-        # Assertions based on expected behavior/output
         self.assertIsInstance(mocked_res, list)
         self.assertEqual(len(mocked_res), 11)
         self.assertTrue(all(isinstance(item, tuple) and len(item) == 4 for item in mocked_res))
@@ -293,7 +291,6 @@ class TestMissingPrimSourceFixer(unittest.TestCase):
         # Run the method that would internally call self.fixer._query(...)
         mocked_res = self.fixer.detect_issue()
 
-        # Assertions based on expected behavior/output
         self.assertIsInstance(mocked_res, list)
         self.assertEqual(len(mocked_res), 5)
         self.assertTrue(all(isinstance(item, tuple) and len(item) == 2 for item in mocked_res))
@@ -355,7 +352,6 @@ class TestMultiPAFixer(unittest.TestCase):
         
         mocked_res = self.fixer.detect_issue()
 
-        # Assertions based on expected behavior/output
         self.assertIsInstance(mocked_res, list)
         self.assertEqual(len(mocked_res), 1)
         self.assertTrue(all(isinstance(item, tuple) and len(item) == 2 for item in mocked_res))
@@ -423,7 +419,6 @@ class TestMultiObjectFixer(unittest.TestCase):
         ]
         mocked_res = self.fixer.detect_issue()
 
-        # Assertions based on expected behavior/output
         self.assertIsInstance(mocked_res, list)
         self.assertEqual(len(mocked_res), 3)
         self.assertTrue(all(isinstance(item, tuple) for item in mocked_res))
@@ -503,7 +498,35 @@ class TestFixProcess(unittest.TestCase):
         fix_process(
             self.sparql_endpoint,
             self.meta_dumps_pub_dates,
-            log_results=False,
+            dry_run=self.dry_run,
+        )
+
+        self.assertEqual(
+            len(list(self.local_dataset.objects(URIRef('https://w3id.org/oc/meta/br/0610491907/prov/se/1'), None))),
+            7
+        )
+        self.assertEqual(len(set(self.local_dataset.subjects())), 13)
+
+        # Serialize and normalize both datasets
+        actual_serialized = self.normalize_datetime_literals(self.local_dataset.serialize(format='trig'))
+        expected_serialized = self.normalize_datetime_literals(expected_ds.serialize(format='trig'))
+
+        # Assert serialized forms are equal
+        self.assertEqual(actual_serialized.strip(), expected_serialized.strip())
+    
+    @patch.object(ProvenanceIssueFixer, '_update')
+    @patch.object(ProvenanceIssueFixer, '_query')
+    def test_fix_process_result_log(self, mock_query, mock_update):
+        expected_ds = Dataset(default_union=True)
+        expected_ds.parse(CORRECTED_DATA_FP, format='trig')
+
+        mock_query.side_effect = self.local_query
+        mock_update.side_effect = self.local_update
+
+        fix_process(
+            self.sparql_endpoint,
+            self.meta_dumps_pub_dates,
+            issues_log_dir='tests/data/fix_process_log',
             dry_run=self.dry_run,
         )
 

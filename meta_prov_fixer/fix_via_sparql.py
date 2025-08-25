@@ -31,7 +31,7 @@ class ProvenanceIssueFixer:
         
         :param sparql_endpoint: The SPARQL endpoint URL.
         :type sparql_endpoint: str
-        :param issues_log_dir: If provided, the path to the directory where the data involved in a query-detected issue will be logged.
+        :param issues_log_dir: If provided, the path to the directory where the data involved in a query-detected issue will be logged. If None, data is kept in memory.
         :type issues_log_fp: Union[str, None]
         """
 
@@ -264,7 +264,8 @@ class FillerFixer(ProvenanceIssueFixer):
         :returns: A dictionary mapping old snapshot URIs to their new URIs.
         :rtype: dict
         """
-
+        to_delete = set(to_delete)
+        remaining = set(remaining)
         all_snapshots:list = sorted(to_delete|remaining, key=lambda x: get_seq_num(x))  # sorting is required!
 
         mapping = {}
@@ -926,7 +927,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
                         output.append(out_row)
                     else:
                         out_row = make_json_safe(out_row)
-                        self.issues_log_fp.write(json.dumps(out_row, ensure_ascii=False) + '\n')
+                        res_log.write(json.dumps(out_row, ensure_ascii=False) + '\n')
             logging.info(f"Found {counter} distinct graphs containing snapshots with too many objects for some properties.")
         finally:
             if self.issues_log_fp:
@@ -1103,7 +1104,7 @@ def fix_process(
     if not dry_run:
         mpsf.fix_issue()
     else:
-        logging.debug("[fix_process]: Would insert a primary source for snapshots lacking a value for this ")
+        logging.debug("[fix_process]: Would insert a primary source for snapshots lacking one.")
 
     # (4) Fix snapshots with multiple objects for prov:wasAttributedTo
     mpaf = MultiPAFixer(endpoint, issues_log_dir=issues_log_dir)
@@ -1119,7 +1120,7 @@ def fix_process(
     if not dry_run:
         mof.fix_issue()
     else:
-        logging.debug("[fix_process]: Would delete filler snapshots")
+        logging.debug("[fix_process]: Would reset graphs containing snapshots with multiple objects for 1-cardinality properties.")
 
       
     
