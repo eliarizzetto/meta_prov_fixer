@@ -61,6 +61,9 @@ class ProvenanceIssueFixer:
                 else:
                     logging.error("Max retries reached. Query failed.")
                     return None
+            finally:
+                time.sleep(0.1)  # slight delay to avoid overwhelming the endpoint
+
     def _update(self, update_query: str, retries: int = 3, delay: float = 2.0) -> None:
         for attempt in range(retries):
             try:
@@ -82,8 +85,7 @@ class ProvenanceIssueFixer:
         provided SPARQL query template. It assumes that the query returns results in a 
         structure compatible with the SPARQL JSON results format.
 
-        :param query_template: A SPARQL query string with two `%d` placeholders 
-                            for offset and limit values (in that order).
+        :param query_template: A SPARQL query string with two `%d` placeholders for offset and limit values (in that order).
         :type query_template: str
         :param limit: The number of results to fetch per page. Defaults to 100000.
         :type limit: int
@@ -445,7 +447,7 @@ class FillerFixer(ProvenanceIssueFixer):
                 # step 3: adapt values of prov:invalidatedAtTime for the entities existing now, identified by "new" URIs
                 new_names = list(set(mapping.values()))
                 self.adapt_invalidatedAtTime(g, new_names)
-        logging.debug(f"Fixing filler snapshots terminated successfully.")
+        logging.info(f"Fixing filler snapshots terminated.")
 
     
 # (2) DATETIME values correction -> move in daughter class DateTimeFixer
@@ -590,6 +592,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
             self.batch_fix_illformed_datetimes(to_fix)
         else:
             self.batch_fix_illformed_datetimes(self.issues_log_fp)
+        logging.info(f"Fixing ill-formed datetime values terminated.")
 
 # (3) correct creation snapshots without primary source -> move to daughter class MissingPrimSourceFixer
 class MissingPrimSourceFixer(ProvenanceIssueFixer):
@@ -607,7 +610,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
         validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
         self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
     
-    def detect_issue(self, limit=10000) -> Union[str, List[Tuple[str, str]]]:
+    def detect_issue(self, limit=1000000) -> Union[str, List[Tuple[str, str]]]:
         """
         Fetch creation snapshots that do not have a primary source.
 
@@ -721,6 +724,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
             self.batch_insert_missing_primsource(to_fix)
         else:
             self.batch_insert_missing_primsource(self.issues_log_fp)
+        logging.info(f"Fixing creation snapshots without a primary source terminated.")
                 
 
 # TODO: (4) Correct snapshots with multiple objects for prov:wasAttributedTo -> move in daughter class MultiPAFixer
@@ -731,7 +735,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
     def __init__(self, endpoint: str, issues_log_dir:Union[str, None]=None):
         super().__init__(endpoint, issues_log_dir=issues_log_dir)
 
-    def detect_issue(self, limit=10000):
+    def detect_issue(self, limit=1000000):
         """
         Fetch graph-snapshot pairs where the snapshot has more than one object for the ``prov:wasAttributedTo`` property.
 
@@ -850,6 +854,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
             self.batch_fix_extra_pa(to_fix)
         else:
             self.batch_fix_extra_pa(self.issues_log_fp)
+        logging.info(f"Fixing graphs with multiple processing agents terminated.")
 
 
 # (5) Correct graphs where at least one snapshots has too many objects for specific properties -> move to daughter class MultiObjectFixer
@@ -867,7 +872,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
         self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
     
-    def detect_issue(self, limit=10000) -> Union[None, List[str]]:
+    def detect_issue(self, limit=1000000) -> Union[None, List[str]]:
         """
         Fetch graphs containing at least one snapshot with multiple objects for 
         a property that only admits one (e.g. ``oc:hasUpdateQuery``).
@@ -1049,12 +1054,12 @@ class MultiObjectFixer(ProvenanceIssueFixer):
                     
 
                     self._update(query)
-                    logging.debug(f"Reset with new creation snapshots graphs from {line_num-batch_size} to {line_num}.")
+                logging.debug(f"Reset with new creation snapshots graphs from {line_num-batch_size} to {line_num}.")
             except Exception as e:
                 logging.error(f"Error while resetting graphs {line_num-batch_size} to {line_num}: {e}")
                 print(f"Error while resetting graphs {line_num-batch_size} to {line_num}: {e}")
                 raise e
-            logging.debug("Graph-resetting process terminated successfully.")
+        logging.debug("Graph-resetting process terminated.")
         return None
 
     def fix_issue(self):
@@ -1069,6 +1074,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
             self.reset_multi_object_graphs(to_fix)
         else:
             self.reset_multi_object_graphs(self.issues_log_fp)
+        logging.info(f"Fixing graphs with multiple objects for 1-cardinality properties terminated.")
 
 
 
@@ -1081,6 +1087,8 @@ def fix_process(
     """
     Function wrapping all the single fix operations into a single process, with strictly ordered steps.
     """
+    print("Processing provenance db for detecting and fixing known issues...")
+    start = time.time()
     
     # (1) Fix filler snapshots
     ff = FillerFixer(endpoint, issues_log_dir=issues_log_dir)
@@ -1121,6 +1129,7 @@ def fix_process(
         mof.fix_issue()
     else:
         logging.debug("[fix_process]: Would reset graphs containing snapshots with multiple objects for 1-cardinality properties.")
+    logging.info("All fixing operations terminated.")
 
-      
-    
+    print(f"Process terminated in {((time.time() - start)/3600):.2f} hours.")
+    return None
