@@ -14,6 +14,9 @@ from urllib.parse import urlparse
 import warnings
 import functools
 import inspect
+import logging
+import tempfile
+
 
 def make_json_safe(obj):
     if isinstance(obj, dict):
@@ -482,58 +485,37 @@ def chunker(
     source: Union[str, IO, Iterable],
     batch_size: int,
     skip_first_line: bool = True,
-    start_line: int = 0,
-    checkpoint_file: Optional[str] = None
-) -> Generator[List[Any], None, None]:
+) -> Generator[Tuple[List[Any], int], None, None]:
     """
-    Yield batches of Python objects from a file or iterable, with optional checkpoint tracking.
+    Yield batches of Python objects from a file or iterable.
 
     :param source: Path to a JSONL file, file-like object, or any iterable of objects.
-    :type source: str | IO | Iterable
     :param batch_size: Number of items per batch.
-    :type batch_size: int
     :param skip_first_line: Skip first line if reading from a file (useful for skipping metadata).
-    :type skip_first_line: bool
-    :param start_line: Line number to resume from (0-based, excluding skipped metadata line).
-    :type start_line: int
-    :param checkpoint_file: If provided, the function writes the last processed line number here after each batch.
-    :type checkpoint_file: Optional[str]
     :yields: Tuple (batch, line_count), where batch is a list of objects and line_count is the last processed line number.
-    :rtype: Generator[Tuple[List[Any], int], None, None]
     """
-    
+
     def _chunk_iter(it: Iterable):
-        line_count = start_line
+        line_count = 0
         batch = []
         for item in it:
             batch.append(item)
             line_count += 1
             if len(batch) >= batch_size:
-                if checkpoint_file:
-                    with open(checkpoint_file, "w") as cp:
-                        cp.write(str(line_count))
                 yield batch, line_count
                 batch = []
         if batch:
-            if checkpoint_file:
-                with open(checkpoint_file, "w") as cp:
-                    cp.write(str(line_count))
             yield batch, line_count
 
     if isinstance(source, str):
         with open(source, "r", encoding="utf-8") as f:
             if skip_first_line:
                 next(f, None)  # Skip metadata
-            # Skip already processed lines if resuming
-            for _ in range(start_line):
-                next(f, None)
             parsed_iter = (json.loads(line) for line in f if line.strip())
             yield from _chunk_iter(parsed_iter)
 
     elif hasattr(source, "read"):
         if skip_first_line:
-            next(source, None)
-        for _ in range(start_line):
             next(source, None)
         parsed_iter = (json.loads(line) for line in source if line.strip())
         yield from _chunk_iter(parsed_iter)
@@ -541,6 +523,114 @@ def chunker(
     else:
         # Iterable
         it = iter(source)
-        for _ in range(start_line):
-            next(it, None)
         yield from _chunk_iter(it)
+
+class CheckpointManager:
+    def __init__(self, path="checkpoint.json"):
+        self.path = path
+
+    def save(self, fixer_name: str, phase: str, batch_idx: int):
+        """Always save checkpoint with a consistent schema."""
+        state = {
+            "fixer": fixer_name,     # which fixer
+            "phase": phase,          # "done" or the phase name
+            "batch_idx": batch_idx,  # -1 if not batch-related
+        }
+        with open(self.path, "w") as f:
+            json.dump(state, f)
+        logging.debug(f"[Checkpoint] Saved: {state}")
+
+    def load(self):
+        if not os.path.exists(self.path):
+            return {}
+        with open(self.path) as f:
+            return json.load(f)
+
+    def clear(self):
+        if os.path.exists(self.path):
+            os.remove(self.path)
+
+
+def checkpointed_batch(stream, batch_size, fixer_name=None, phase=None, checkpoint=Union[None, CheckpointManager]):
+    """
+    Yield batches with optional checkpointing.
+    - stream can be:
+        * an iterable of objects (list, generator, etc.)
+        * a file path (str) to a JSONL file
+    """
+
+    batch_size = int(batch_size)
+
+    source_iter = chunker(stream, batch_size)
+
+    # --- no checkpoint: just yield batches ---
+    if checkpoint is None:
+        for idx, (batch, line_num) in enumerate(source_iter):
+            yield idx, (batch, line_num)
+        return
+
+    # --- resumable checkpoint mode ---
+    state = checkpoint.load()
+    last_idx = -1
+    if (
+        state.get("fixer") == fixer_name
+        and state.get("phase") == phase
+        and "batch_idx" in state
+    ):
+        last_idx = state["batch_idx"]
+
+    for idx, (batch, line_num) in enumerate(source_iter):
+        if idx <= last_idx:
+            continue
+        yield idx, (batch, line_num)
+        checkpoint.save(fixer_name, phase, idx)
+    
+def save_detection_checkpoint(fixer_name=None, phase=None, checkpoint=Union[None, CheckpointManager]):
+    """
+    Saves to checkpoint the state indicating that a fixer's detection step has completed succesfully.
+    """
+
+    if checkpoint is None:
+        return
+    else:
+        checkpoint.save(fixer_name, phase, -1)
+
+def detection_completed(fixer_name=None, phase=None, checkpoint=Union[None, CheckpointManager])-> bool:
+    """
+    Checks the state of the checkpoint to see if a given fixer's detection step is completed
+    """
+    if checkpoint:
+        state = checkpoint.load()
+        if (
+            state.get("fixer") == fixer_name
+            and state.get("phase") == phase
+        ):
+            return True
+        else:
+            return False
+    return True
+
+
+class TimedProcess:
+    def __init__(self, total_phases):
+        self.total_phases = total_phases
+        self.phase_times = []
+        self.start_time = None
+        self.current_phase_start = None
+
+    def start(self):
+        self.start_time = time.time()
+
+    def start_phase(self):
+        self.current_phase_start = time.time()
+
+    def end_phase(self):
+        duration = time.time() - self.current_phase_start
+        self.phase_times.append(duration)
+        return duration
+
+    def eta(self, current_phase_idx):
+        elapsed = time.time() - self.start_time
+        avg = sum(self.phase_times) / len(self.phase_times) if self.phase_times else 0
+        remaining = (self.total_phases - current_phase_idx - 1) * avg
+        return elapsed, remaining
