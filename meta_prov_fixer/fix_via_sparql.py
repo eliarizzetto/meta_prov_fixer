@@ -830,7 +830,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
         PREFIX prov: <http://www.w3.org/ns/prov#>
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
-        DELETE WHERE {
+        DELETE DATA {
           $quads_to_delete
         } ;
         INSERT DATA {
@@ -849,8 +849,9 @@ class MultiPAFixer(ProvenanceIssueFixer):
                 to_delete = []
                 to_insert = []
                 for g, s in batch:
-                    to_delete.append(f"GRAPH <{g}> {{ <{s}> prov:wasAttributedTo ?o . }}\n")
-                    to_insert.append(f"GRAPH <{g}> {{ <{s}> prov:wasAttributedTo <https://w3id.org/oc/meta/prov/pa/2> . }}\n")
+                    to_delete.append(f"GRAPH <{g}> {{ <{s}> prov:wasAttributedTo <https://orcid.org/0000-0002-8420-0696> . }}\n")  # deletes Arcangelo's ORCID
+                    to_delete.append(f"GRAPH <{g}> {{ <{s}> prov:wasAttributedTo <https://w3id.org/oc/meta/prov/pa/1> . }}\n")  # deletes Meta's default processing agent (for ingestions only)
+                    to_insert.append(f"GRAPH <{g}> {{ <{s}> prov:wasAttributedTo <https://w3id.org/oc/meta/prov/pa/2> . }}\n")  # inserts Meta's processsing agent for modification processes
 
                 to_delete_str = "  ".join(to_delete)
                 to_insert_str = "  ".join(to_insert)
@@ -979,43 +980,61 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         :returns: None
         """
 
+        # template = Template("""
+        # PREFIX prov: <http://www.w3.org/ns/prov#>
+        # PREFIX dcterms: <http://purl.org/dc/terms/>
+        # PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        # PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+        # #WITH GRAPH <$graph> # WITH clause seems not to be supported in rdflib
+        # DELETE {
+        #   GRAPH <$graph> {
+        #     ?s ?p ?o
+        #   }
+        # }
+        # INSERT {
+        #   GRAPH <$graph> {
+        #     <$creation_snapshot> prov:hadPrimarySource <$primary_source> ;
+        #       prov:wasAttributedTo <$processing_agent> ;
+        #       prov:specializationOf <$specialization_of> ;
+        #       dcterms:description "$description" ;
+        #       rdf:type prov:Entity ;
+        #       prov:generatedAtTime ?genTime .
+        #   }
+        # }
+        # WHERE {
+        #   {
+        #     SELECT ?genTime WHERE {
+        #       GRAPH <$graph> {
+        #         ?_s prov:generatedAtTime ?genTime .
+        #         FILTER(strends(str(?_s), "/se/1"))
+        #       }
+        #     }
+        #   }
+        #   GRAPH <$graph> {
+        #     ?s ?p ?o .
+        #   }
+        # }
+        # """)
+
         template = Template("""
         PREFIX prov: <http://www.w3.org/ns/prov#>
         PREFIX dcterms: <http://purl.org/dc/terms/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
-        #WITH GRAPH <$graph> # WITH clause seems not to be supported in rdflib
-        DELETE {
-          GRAPH <$graph> {
-            ?s ?p ?o
-          }
-        }
-        INSERT {
+        CLEAR GRAPH <$graph> ;
+        INSERT DATA {
           GRAPH <$graph> {
             <$creation_snapshot> prov:hadPrimarySource <$primary_source> ;
               prov:wasAttributedTo <$processing_agent> ;
               prov:specializationOf <$specialization_of> ;
               dcterms:description "$description" ;
               rdf:type prov:Entity ;
-              prov:generatedAtTime ?genTime .
-          }
-        }
-        WHERE {
-          {
-            SELECT ?genTime WHERE {
-              GRAPH <$graph> {
-                ?_s prov:generatedAtTime ?genTime .
-                FILTER(strends(str(?_s), "/se/1"))
-              }
-            }
-          }
-          GRAPH <$graph> {
-            ?s ?p ?o .
+              prov:generatedAtTime "$gen_time"^^xsd:dateTime .
           }
         }
         """)
-
         logging.debug("Resetting graphs with too many objects by creating a new single creation snapshot...")
 
         # batch_size = 500  # updates are executed with individual queries anyway
@@ -1043,7 +1062,8 @@ class MultiObjectFixer(ProvenanceIssueFixer):
                         primary_source = prim_source, 
                         processing_agent = processing_agent,
                         specialization_of = referent, 
-                        description = desc
+                        description = desc,
+                        gen_time = gen_time  # double check
                     )
 
                     self._update(query)
