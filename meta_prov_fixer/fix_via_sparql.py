@@ -207,7 +207,7 @@ class FillerFixer(ProvenanceIssueFixer):
             save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
         return list(dict(grouped_result).items()) if not self.issues_log_fp else None
 
-    def batch_delete_filler_snapshots(self, deletions: Union[str, List[Tuple[str, Dict[str, Set[str]]]]], batch_size=500, checkpoint=None) -> None:
+    def batch_delete_filler_snapshots(self, deletions: Union[str, List[Tuple[str, Dict[str, Set[str]]]]], batch_size=200, checkpoint=None) -> None:
         """
         Deletes snapshots from the triplestore based on the provided deletions dictionary.
         :param deletions: A list of tuples where the first element is a graph URI,  and the second is a dictionary with 'to_delete' and 'remaining_snapshots' sets.
@@ -394,7 +394,7 @@ class FillerFixer(ProvenanceIssueFixer):
 
             self._update(query)
 
-    def fix_issue(self, checkpoint=None):
+    def fix_issue(self, batch_size=200, checkpoint=None):
 
         # step 0: detect filler snapshots
         if not self.issues_log_fp:
@@ -418,7 +418,7 @@ class FillerFixer(ProvenanceIssueFixer):
         else:
             stream = self.issues_log_fp
         
-        batch_size = 500
+        # batch_size = 500
 
         for batch_idx, (batch, _) in checkpointed_batch(
             stream, 
@@ -451,7 +451,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
     def __init__(self, endpoint: str, issues_log_dir:Union[str, None]=None):
         super().__init__(endpoint, issues_log_dir=issues_log_dir)
     
-    def detect_issue(self, limit=100000) -> List[Tuple[str]]:
+    def detect_issue(self, limit=10000) -> List[Tuple[str]]:
         """
         Fetch all quads where the datetime object value is not syntactically correct or complete, including cases where
         the timezone is not specified (making the datetime impossible to compare with other offset-aware datetimes) 
@@ -522,7 +522,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
         
         return result if not self.issues_log_fp else None  # if issues_log_fp is provided, the results are logged to the file and not returned
 
-    def batch_fix_illformed_datetimes(self, quads: Union[list, str], batch_size=500, checkpoint=None) -> None:
+    def batch_fix_illformed_datetimes(self, quads: Union[list, str], batch_size=200, checkpoint=None) -> None:
         """
         Replace the datetime object of each quad in ``quads`` with its correct version (offset-aware and without microseconds).
         Note that ``xsd:dateTime`` is always made explicit in newly inserted values.
@@ -612,7 +612,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
         validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
         self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
     
-    def detect_issue(self, limit=100000) -> Union[str, List[Tuple[str, str]]]:
+    def detect_issue(self, limit=10000) -> Union[str, List[Tuple[str, str]]]:
         """
         Fetch creation snapshots that do not have a primary source.
 
@@ -678,7 +678,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
         
         return results if not self.issues_log_fp else None  # (<snapshot uri>, <gen. time>)
     
-    def batch_insert_missing_primsource(self, creations_to_fix: Union[str, List[Tuple[str, str]]], batch_size=500, checkpoint=None):
+    def batch_insert_missing_primsource(self, creations_to_fix: Union[str, List[Tuple[str, str]]], batch_size=200, checkpoint=None):
         """
         Insert primary sources for creation snapshots that do not have one, in batches.
 
@@ -748,7 +748,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
     def __init__(self, endpoint: str, issues_log_dir:Union[str, None]=None):
         super().__init__(endpoint, issues_log_dir=issues_log_dir)
 
-    def detect_issue(self, limit=100000):
+    def detect_issue(self, limit=10000):
         """
         Fetch graph-snapshot pairs where the snapshot has more than one object for the ``prov:wasAttributedTo`` property.
 
@@ -816,7 +816,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
         return result if not self.issues_log_fp else None 
     
 
-    def batch_fix_extra_pa(self, multi_pa_snapshots:Union[str, List[Tuple[str]]], batch_size=500, checkpoint=None):
+    def batch_fix_extra_pa(self, multi_pa_snapshots:Union[str, List[Tuple[str]]], batch_size=200, checkpoint=None):
         """
         Delete triples where the value of ``prov:wasAttributedTo`` is <https://w3id.org/oc/meta/prov/pa/1> if there is at least another processing agent for the same snapshot subject.
 
@@ -898,7 +898,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
         self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
     
-    def detect_issue(self, limit=100000) -> Union[None, List[str]]:
+    def detect_issue(self, limit=10000) -> Union[None, List[str]]:
         """
         Fetch graphs containing at least one snapshot with multiple objects for 
         a property that only admits one (e.g. ``oc:hasUpdateQuery``).
@@ -969,7 +969,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         
         return output if not self.issues_log_fp else None 
     
-    def reset_multi_object_graphs(self, graphs:Union[str, list], checkpoint=None):
+    def reset_multi_object_graphs(self, graphs:Union[str, list], batch_size=200, checkpoint=None):
         """
         Reset each graph in ``graphs`` by deleting the existing snapshots and creating a new 
         creation snapshot, which will be the only one left for that graph.
@@ -1018,7 +1018,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
 
         logging.debug("Resetting graphs with too many objects by creating a new single creation snapshot...")
 
-        batch_size = 500  # updates are executed with individual queries anyway
+        # batch_size = 500  # updates are executed with individual queries anyway
 
         for batch_idx, (batch, line_num) in checkpointed_batch(
             graphs, 
@@ -1045,7 +1045,6 @@ class MultiObjectFixer(ProvenanceIssueFixer):
                         specialization_of = referent, 
                         description = desc
                     )
-                    
 
                     self._update(query)
                 logging.info(f"[{self.__class__.__name__}] Batch {batch_idx} completed.")
