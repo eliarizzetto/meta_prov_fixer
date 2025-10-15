@@ -5,9 +5,13 @@ from string import Template
 from SPARQLWrapper import SPARQLWrapper, JSON, POST
 from tqdm import tqdm
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime
 import os
 from meta_prov_fixer.utils import *
+import re
+from rdflib.plugins.sparql.processor import SPARQLResult
+from rdflib import Dataset
+import json
 
 # # OC Meta published RDF dumps publication dates and DOIs at the time of writing this code (2025-07-01).
 # meta_dumps_pub_dates = [
@@ -22,8 +26,73 @@ from meta_prov_fixer.utils import *
 # ]
 
 
+def simulate_ff_changes(local_named_graph:dict) -> dict:
+    """
+    Simulates the changes that FillerFixer would operate on the input local graph in the live triplestore 
+    when running FillerFixer.fix_issue(). `local_named_graph` is treated as if it was the triplestore itself.
+
+    :param local_named_graph: The JSON-LD-formatted dictionary corresponding to a provenance named graph.
+    """
+
+    logging.disable(logging.CRITICAL)  # suspend all logs below CRITICAL
+
+    try:
+        fake_ff = FillerFixer('http://example.org/sparql/')
+        local_dataset = Dataset(default_union=True)
+        local_dataset.parse(data=local_named_graph, format='json-ld')
+
+        def convert_query_results(qres: SPARQLResult) -> dict:
+            """
+            Naively converts the results of a SPARQL query made with rdflib to a local Graph/Dataset object to
+            to SPARQLWrapper-like results made to an endpoint (at least for what concerns the bindings['results'] part).
+            """
+            try:
+                return json.loads(qres.serialize(format='json'))
+            except Exception as e:
+                print(e)
+                return None
+
+        def rdflib_query(dataset:Dataset, query: str) -> Union[dict, None]:
+            """
+            Executes a SPARQL query on a given rdflib Dataset and returns the results in a SPARQLWrapper-like JSON format.
+            """
+            return dataset.query(query)
+
+        def rdflib_update(dataset:Dataset, query: str) -> None:
+            """
+            Executes a SPARQL update query on a given rdflib Dataset.
+            """
+            dataset.update(query)
+
+
+        def local_query(q):
+            """Custom function to simulate _query using local Dataset."""
+            qres = rdflib_query(local_dataset, q)
+            return convert_query_results(qres)
+
+        def local_update(q):
+            """Custom function to simulate _update using local Dataset."""
+            return rdflib_update(local_dataset, q)
+        
+        fake_ff._query = local_query  # overwrite _query
+        fake_ff._update = local_update  # overwrite _update
+
+        fake_ff.fix_issue()
+
+        graph_object = json.loads(local_dataset.serialize(format='json-ld'))
+        if len(graph_object) > 1:
+            raise ValueError("The input named graph seems to contain multiple graphs!")
+        
+        result = graph_object[0] # return the dict inside the list
+        return result
+    
+    finally:
+        logging.disable(logging.NOTSET)  # re-enable normal logging
+
+
+
 class ProvenanceIssueFixer:
-    def __init__(self, endpoint: str, issues_log_dir:Union[str, None]=None, checkpoint='checkpoint.json'):
+    def __init__(self, endpoint: str, dump_dir:Union[list, None]=None, issues_log_dir:Union[str, None]=None, checkpoint='checkpoint.json'):
         """
         Base class for fixing provenance issues via SPARQL queries.
         Initializes the SPARQL endpoint and sets up the query method.
@@ -31,12 +100,14 @@ class ProvenanceIssueFixer:
         
         :param sparql_endpoint: The SPARQL endpoint URL.
         :type sparql_endpoint: str
+        :param dump_dir: Path to the directory storing the JSON-LD dump files for provenance (default: None).
         :param issues_log_dir: If provided, the path to the directory where the data involved in a query-detected issue will be logged. If None, data is kept in memory.
         :type issues_log_fp: Union[str, None]
         """
 
         self.endpoint = endpoint
         self.sparql = SPARQLWrapper(self.endpoint)
+        self.dump_dir = dump_dir or None
         self.sparql.setReturnFormat(JSON)
         self.sparql.setMethod(POST)
         self.checkpoint = CheckpointManager(checkpoint)
@@ -126,8 +197,9 @@ class FillerFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to filler snapshots in the OpenCitations Meta graph.
     """
-    def __init__(self, endpoint: str, issues_log_dir:Union[str, None]=None):
-        super().__init__(endpoint, issues_log_dir=issues_log_dir)
+    def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None):
+        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
+        self.rename_mapping = {}
 
     def detect_issue(self, limit=10000) -> List[Tuple[str, Dict[str, Set[str]]]]:
         """
@@ -206,10 +278,64 @@ class FillerFixer(ProvenanceIssueFixer):
         if self.issues_log_fp:
             save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
         return list(dict(grouped_result).items()) if not self.issues_log_fp else None
+    
+    def detect_issue_from_files(self):
+
+        grouped_result = defaultdict(lambda: {'to_delete': set(), 'remaining_snapshots': set()})
+
+        paradata = get_process_paradata(self)
+        if self.issues_log_fp:
+            res_log = open(self.issues_log_fp, 'w', encoding='utf-8')
+            res_log.write(json.dumps(paradata, ensure_ascii=False) + '\n')
+        else:
+            logging.info(paradata)
+
+        try:
+            logging.debug("Fetching filler snapshots (to be deleted) from RDF files...")
+            for graph_obj in read_rdf_dump(self.dump_dir):
+                if len(graph_obj['@graph']) <= 1:
+                    continue
+                graph_uri = graph_obj['@id']
+                fillers = set()
+
+                for snapshot_obj in graph_obj['@graph']:
+                    se_uri = snapshot_obj['@id']
+                    if snapshot_obj.get('http://purl.org/dc/terms/description'):
+                        desc:list = [d['@value'].lower() for d in snapshot_obj['http://purl.org/dc/terms/description']]
+                    else:
+                        desc = ['']
+                    if (
+                        not snapshot_obj.get('https://w3id.org/oc/ontology/hasUpdateQuery') 
+                        and get_seq_num(se_uri) != 1
+                        and not any('merged' in d for d in desc)
+                        ):
+
+                        fillers.add(se_uri)
+                if fillers:
+                    other_se :set = {se_obj['@id'] for se_obj in graph_obj['@graph']} - fillers 
+
+
+                    grouped_result.update({graph_uri: {'to_delete': fillers, 'remaining_snapshots': other_se}})
+
+
+            logging.info(f"{sum([len(d['to_delete']) for d in grouped_result.values()])} snapshots marked for deletion.")
+            if self.issues_log_fp:
+                for obj in list(dict(grouped_result).items()):
+                    obj = make_json_safe(obj)
+                    res_log.write(json.dumps(obj, ensure_ascii=False) + '\n')
+
+        finally:
+            if self.issues_log_fp:
+                res_log.close()
+
+        if self.issues_log_fp:
+            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+        return list(dict(grouped_result).items()) if not self.issues_log_fp else None
+            
 
     def batch_delete_filler_snapshots(self, deletions: Union[str, List[Tuple[str, Dict[str, Set[str]]]]], batch_size=200, checkpoint=None) -> None:
         """
-        Deletes snapshots from the triplestore based on the provided deletions dictionary.
+        Deletes snapshots from the triplestore based on the provided deletions list.
         :param deletions: A list of tuples where the first element is a graph URI,  and the second is a dictionary with 'to_delete' and 'remaining_snapshots' sets.
         :type deletions: List[Tuple[str, Dict[str, Set[str]]]]
         """
@@ -273,7 +399,7 @@ class FillerFixer(ProvenanceIssueFixer):
 
         :param to_delete: A set of snapshot URIs that should be deleted.
         :type to_delete: set
-        :param remaining: A set of snapshot URIs that should remain in the graph (AFTER BEING RENAMED).
+        :param remaining: A set of URIs of snapshots that should remain in the graph (AFTER BEING RENAMED).
         :type remaining: set
         :returns: A dictionary mapping old snapshot URIs to their new URIs.
         :rtype: dict
@@ -401,7 +527,10 @@ class FillerFixer(ProvenanceIssueFixer):
             to_fix = self.detect_issue() # keep all the issues in memory
         else:
             if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
-                self.detect_issue() # writes all issues to self.issues_log_fp
+                if not self.dump_dir:
+                    self.detect_issue() # writes all issues to self.issues_log_fp
+                else:
+                    self.detect_issue_from_files()
             else:
                 logging.warning(f"[{self.__class__.__name__}] Issues already detected: reading from file {self.issues_log_fp}")
 
@@ -448,8 +577,8 @@ class DateTimeFixer(ProvenanceIssueFixer):
     A class to fix issues related to ill-formed datetime values in the OpenCitations Meta graph.
     This class provides methods to fetch quads with ill-formed datetime values, correct them, and batch fix them in the triplestore.
     """
-    def __init__(self, endpoint: str, issues_log_dir:Union[str, None]=None):
-        super().__init__(endpoint, issues_log_dir=issues_log_dir)
+    def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None):
+        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
     
     def detect_issue(self, limit=10000) -> List[Tuple[str]]:
         """
@@ -522,6 +651,64 @@ class DateTimeFixer(ProvenanceIssueFixer):
         
         return result if not self.issues_log_fp else None  # if issues_log_fp is provided, the results are logged to the file and not returned
 
+    def detect_issue_from_files(self, modified_graphs:dict) -> List[Tuple[str]]:
+
+        result = []
+        counter = 0
+
+        paradata = get_process_paradata(self)
+        if self.issues_log_fp:
+            res_log = open(self.issues_log_fp, 'w', encoding='utf-8')
+            res_log.write(json.dumps(paradata, ensure_ascii=False) + '\n')
+        else:
+            logging.info(paradata)
+        
+        try:
+            logging.debug("Fetching ill-formed datetime values from RDF files...")
+
+            gentime_prop = 'http://www.w3.org/ns/prov#generatedAtTime'
+            invaltime_prop = 'http://www.w3.org/ns/prov#invalidatedAtTime'
+
+            for graph_obj in read_rdf_dump(self.dump_dir):
+                if graph_obj['@id'] in modified_graphs:
+                    graph_obj = modified_graphs[graph_obj['@id']] # use the graph already modified by FillerFixer (simulation)
+
+                for se_obj in graph_obj['@graph']:
+                    if se_obj.get(gentime_prop):
+                        genTime_val = [d['@value'] for d in se_obj[gentime_prop]]
+                    if se_obj.get(invaltime_prop):
+                        invalTime_val = [d['@value'] for d in se_obj[invaltime_prop]]
+
+                    pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:(?:\+00:00)|Z)$"
+
+                    for prop, val in [(gentime_prop, genTime_val), (invaltime_prop, invalTime_val)]:
+                        if val:
+                            for dt in val:
+                                if not re.match(pattern, dt):
+                                    g = graph_obj['@id']
+                                    s = se_obj['@id']
+                                    p = prop
+                                    
+                                    counter +=1
+                                    out_row = (g, s, p, dt)
+
+                                    if not self.issues_log_fp:
+                                        result.append(out_row)
+                                    else:
+                                        out_row = make_json_safe(out_row)
+                                        res_log.write(json.dumps(out_row, ensure_ascii=False) + '\n')
+
+            logging.info(f"Fetched {counter} quads with a badly formed datetime object value.")
+        
+        finally:
+            if self.issues_log_fp:
+                res_log.close()
+
+        if self.issues_log_fp:
+            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+        
+        return result if not self.issues_log_fp else None  # if issues_log_fp is provided, the results are logged to the file and not returned
+
     def batch_fix_illformed_datetimes(self, quads: Union[list, str], batch_size=200, checkpoint=None) -> None:
         """
         Replace the datetime object of each quad in ``quads`` with its correct version (offset-aware and without microseconds).
@@ -578,14 +765,17 @@ class DateTimeFixer(ProvenanceIssueFixer):
                 raise e
         return None
 
-    def fix_issue(self, checkpoint=None):
+    def fix_issue(self, checkpoint=None, modified_graphs:dict=None):
 
         # step 0: detect ill-formed datetime values
         if not self.issues_log_fp:
             to_fix = self.detect_issue() # keep all the issues in memory
         else:
             if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
-                self.detect_issue() # writes all issues to self.issues_log_fp
+                if not self.dump_dir:
+                    self.detect_issue() # writes all issues to self.issues_log_fp
+                else:
+                    self.detect_issue_from_files(modified_graphs)
             else:
                 logging.warning(f"[{self.__class__.__name__}] Issues already detected: reading from file {self.issues_log_fp}")
 
@@ -601,14 +791,14 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to creation snapshots that do not have a primary source in the OpenCitations Meta graph.
     """
-    def __init__(self, endpoint: str, meta_dumps_pub_dates: List[Tuple[str, str]], issues_log_dir:Union[str, None]=None):
+    def __init__(self, endpoint: str, meta_dumps_pub_dates: List[Tuple[str, str]], dump_dir:str=None, issues_log_dir:Union[str, None]=None):
         """
         :param endpoint: The SPARQL endpoint URL.
         :type endpoint: str
         :param meta_dumps_pub_dates: Register of published OpenCitations Meta dumps, in the form: [(<ISO format date 1>, <dump DOI1>), (<ISO format date 2>, <dump DOI2>), ...]
         :type meta_dumps_pub_dates: List[Tuple[str, str]]
         """
-        super().__init__(endpoint, issues_log_dir=issues_log_dir)
+        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
         validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
         self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
     
@@ -677,6 +867,56 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
             save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
         
         return results if not self.issues_log_fp else None  # (<snapshot uri>, <gen. time>)
+
+
+    def detect_issue_from_files(self, modified_graphs:dict) -> Union[str, List[Tuple[str, str]]]:
+
+        results = []
+        counter = 0
+
+        paradata = get_process_paradata(self)
+        if self.issues_log_fp:
+            res_log = open(self.issues_log_fp, 'w', encoding='utf-8')
+            res_log.write(json.dumps(paradata, ensure_ascii=False) + '\n')
+        else:
+            logging.info(paradata)
+
+        logging.debug("Fetching creation snapshots without a primary source from RDF files...")
+        try:
+            for graph_obj in read_rdf_dump(self.dump_dir):
+                if graph_obj['@id'] in modified_graphs:
+                    graph_obj = modified_graphs[graph_obj['@id']] # use the graph already modified by FillerFixer (simulation)
+                for se_obj in graph_obj['@graph']:
+                    s = se_obj['@id'] 
+                    if get_seq_num(s) != 1:
+                        continue
+                    gentime_prop = 'http://www.w3.org/ns/prov#generatedAtTime'
+
+                    if se_obj.get(gentime_prop) and not se_obj.get('http://www.w3.org/ns/prov#hadPrimarySource'):
+                        genTime_values = [d['@value'] for d in se_obj[gentime_prop]]
+                        if len(genTime_values) == 1:
+                            gen_time = normalise_datetime(genTime_values[0])
+                        elif len(genTime_values) > 1:
+                            gen_time = min([normalise_datetime(dt) for dt in genTime_values], key=lambda x: datetime.fromisoformat(x))  # take the earliest datetime value
+                        
+                        counter +=1
+                        out_row = (s, gen_time)
+
+                        if not self.issues_log_fp:
+                            results.append(out_row)
+                        else:
+                            out_row = make_json_safe(out_row)
+                            res_log.write(json.dumps(out_row, ensure_ascii=False) + '\n')
+            
+            logging.info(f"Found {counter} creation snapshots without a primary source.")
+        finally:
+            if self.issues_log_fp:
+                res_log.close()
+
+        if self.issues_log_fp:
+            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+        
+        return results if not self.issues_log_fp else None  # (<snapshot uri>, <gen. time>)
     
     def batch_insert_missing_primsource(self, creations_to_fix: Union[str, List[Tuple[str, str]]], batch_size=200, checkpoint=None):
         """
@@ -721,14 +961,17 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
         return None
         
 
-    def fix_issue(self, checkpoint=None):
+    def fix_issue(self, checkpoint=None, modified_graphs:dict=None):
         
         # step 0: detect creation snapshots missing a primary source
         if not self.issues_log_fp:
             to_fix = self.detect_issue()
         else:
             if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
-                self.detect_issue() # writes all issues to self.issues_log_fp
+                if not self.dump_dir:
+                    self.detect_issue() # writes all issues to self.issues_log_fp
+                else:
+                    self.detect_issue_from_files(modified_graphs)
             else:
                 logging.warning(f"[{self.__class__.__name__}] Issues already detected: reading from file {self.issues_log_fp}")
 
@@ -745,8 +988,8 @@ class MultiPAFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to snapshots that have multiple objects for the ``prov:wasAttributedTo`` property in the OpenCitations Meta graph.
     """
-    def __init__(self, endpoint: str, issues_log_dir:Union[str, None]=None):
-        super().__init__(endpoint, issues_log_dir=issues_log_dir)
+    def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None):
+        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
 
     def detect_issue(self, limit=10000):
         """
@@ -816,6 +1059,52 @@ class MultiPAFixer(ProvenanceIssueFixer):
         return result if not self.issues_log_fp else None 
     
 
+    def detect_issue_from_files(self, modified_graphs:dict):
+
+        result = []
+        counter = 0
+
+        paradata = get_process_paradata(self)
+        if self.issues_log_fp:
+            res_log = open(self.issues_log_fp, 'w', encoding='utf-8')
+            res_log.write(json.dumps(paradata, ensure_ascii=False) + '\n')
+        else:
+            logging.info(paradata)
+
+        logging.debug("Fetching snapshots with multiple objects for prov:wasAttributedTo from RDF files...")
+        try:
+            attribut_prop = 'http://www.w3.org/ns/prov#wasAttributedTo'
+            default_val = 'https://w3id.org/oc/meta/prov/pa/1'
+            for graph_obj in read_rdf_dump(self.dump_dir):
+                if graph_obj['@id'] in modified_graphs:
+                    graph_obj = modified_graphs[graph_obj['@id']] # use the graph already modified by FillerFixer (simulation)
+                for se_obj in graph_obj['@graph']:
+                    if len(se_obj.get(attribut_prop, [])) <= 1:
+                        continue                           
+                    attribut_vals = [d['@id'] for d in se_obj[attribut_prop]]
+                    if default_val in attribut_vals and any(v for v in attribut_vals if v != default_val):
+                        g = graph_obj['@id']
+                        s = se_obj['@id']
+
+                        counter +=1
+                        out_row = (g, s)
+
+                    if not self.issues_log_fp:
+                        result.append(out_row)
+                    else:
+                        out_row = make_json_safe(out_row)
+                        res_log.write(json.dumps(out_row, ensure_ascii=False) + '\n')
+            logging.info(f"Found {counter} snapshots with multiple objects for prov:wasAttributedTo.")
+        finally:
+            if self.issues_log_fp:
+                res_log.close()
+
+        if self.issues_log_fp:
+            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+        
+        return result if not self.issues_log_fp else None
+    
+
     def batch_fix_extra_pa(self, multi_pa_snapshots:Union[str, List[Tuple[str]]], batch_size=200, checkpoint=None):
         """
         Delete triples where the value of ``prov:wasAttributedTo`` is <https://w3id.org/oc/meta/prov/pa/1> if there is at least another processing agent for the same snapshot subject.
@@ -865,14 +1154,17 @@ class MultiPAFixer(ProvenanceIssueFixer):
                 raise e
         return None
     
-    def fix_issue(self, checkpoint=None):
+    def fix_issue(self, checkpoint=None, modified_graphs:dict=None):
 
         # step 0: detect graph and snapshots that have an additional object besides the typical <https://w3id.org/oc/meta/prov/pa/1> for prov:wasAttributedTo
         if not self.issues_log_fp:
             to_fix = self.detect_issue()
         else:
             if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
-                self.detect_issue() # writes all issues to self.issues_log_fp
+                if not self.dump_dir:
+                    self.detect_issue() # writes all issues to self.issues_log_fp
+                else:
+                    self.detect_issue_from_files(modified_graphs)
             else:
                 logging.warning(f"[{self.__class__.__name__}] Issues already detected: reading from file {self.issues_log_fp}")
 
@@ -889,12 +1181,12 @@ class MultiObjectFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to graphs where at least one snapshot has too many objects for specific properties in the OpenCitations Meta graph.
     """
-    def __init__(self, endpoint:str, meta_dumps_pub_dates: List[Tuple[str, str]], issues_log_dir:Union[str, None]=None):
+    def __init__(self, endpoint:str, meta_dumps_pub_dates: List[Tuple[str, str]], dump_dir:str=None, issues_log_dir:Union[str, None]=None):
         """
         :param meta_dumps_pub_dates: Register of published OpenCitations Meta dumps, in the form: [(<ISO format date 1>, <dump DOI1>), (<ISO format date 2>, <dump DOI2>), ...]
         :type meta_dumps_pub_dates: List[Tuple[str, str]]
         """
-        super().__init__(endpoint, issues_log_dir=issues_log_dir)
+        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
         self.pa_uri = "https://w3id.org/oc/meta/prov/pa/1" # URI of the processing agent to be used as objects of prov:wasAtttributedTo for newly created snapshots, which is always the default one
         validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
         self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
@@ -969,6 +1261,70 @@ class MultiObjectFixer(ProvenanceIssueFixer):
             save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
         
         return output if not self.issues_log_fp else None 
+
+    def detect_issue_from_files(self, modified_graphs:dict) -> Union[None, List[str]]:
+
+        output = []
+        counter = 0
+
+        paradata = get_process_paradata(self)
+        if self.issues_log_fp:
+            res_log = open(self.issues_log_fp, 'w', encoding='utf-8')
+            res_log.write(json.dumps(paradata, ensure_ascii=False) + '\n')
+        else:
+            logging.info(paradata)
+
+
+        logging.debug("Fetching URIs of graphs containing snapshots with too many objects from RDF files...")
+        try:
+            inval_dt_prop = 'http://www.w3.org/ns/prov#invalidatedAtTime'
+            prim_source_prop = 'http://www.w3.org/ns/prov#hadPrimarySource'
+            upd_query_prop = 'https://w3id.org/oc/ontology/hasUpdateQuery'
+
+            for graph_obj in read_rdf_dump(self.dump_dir):
+                if graph_obj['@id'] in modified_graphs:
+                    graph_obj = modified_graphs[graph_obj['@id']] # use the graph already modified by FillerFixer (simulation)
+                switch = False
+                for se_obj in graph_obj['@graph']:
+                    # check if any property among [inval_dt_prop, prim_source_prop, upd_query_prop] has more than one value
+                    if any(len(se_obj.get(p, [])) > 1 for p in [inval_dt_prop, prim_source_prop, upd_query_prop]):
+                        switch = True
+                        break
+                if not switch:
+                    continue
+
+                g = graph_obj['@id']
+                gen_time = None
+
+                for se_obj in graph_obj['@graph']:
+                    if se_obj['@id'] == g + 'se/1':
+                        genTime_values = [d['@value'] for d in se_obj.get('http://www.w3.org/ns/prov#generatedAtTime', [])]
+                        if len(genTime_values) == 1:
+                            gen_time = normalise_datetime(genTime_values[0])
+                        elif len(genTime_values) > 1:
+                            gen_time = min([normalise_datetime(dt) for dt in genTime_values], key=lambda x: datetime.fromisoformat(x))  # take the earliest datetime value
+                        break
+                else: # i.e. no break
+                    logging.warning(f"No creation snapshot found for graph {g}. Skipping...")
+                    continue
+
+                counter += 1
+                out_row = (g, gen_time)
+                if not self.issues_log_fp:
+                    output.append(out_row)
+                else:
+                    out_row = make_json_safe(out_row)
+                    res_log.write(json.dumps(out_row, ensure_ascii=False) + '\n')
+            logging.info(f"Found {counter} distinct graphs containing snapshots with too many objects for some properties.")
+        finally:
+            if self.issues_log_fp:
+                res_log.close()
+
+        if self.issues_log_fp:
+            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+        
+        return output if not self.issues_log_fp else None 
+
     
     def reset_multi_object_graphs(self, graphs:Union[str, list], batch_size=200, checkpoint=None):
         """
@@ -1076,13 +1432,16 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         return None
 
 
-    def fix_issue(self, checkpoint=None):
+    def fix_issue(self, checkpoint=None, modified_graphs:dict=None):
         # step 0: detect graphs and snapshots with multiple objects for 1-cardinality properties
         if not self.issues_log_fp:
             to_fix = self.detect_issue()
         else:
             if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
-                self.detect_issue() # writes all issues to self.issues_log_fp
+                if not self.dump_dir:
+                    self.detect_issue() # writes all issues to self.issues_log_fp
+                else:
+                    self.detect_issue_from_files(modified_graphs)
             else:
                 logging.warning(f"[{self.__class__.__name__}] Issues already detected: reading from file {self.issues_log_fp}")
 
@@ -1136,6 +1495,83 @@ def fix_process(
         timer.start_phase()
         if not dry_run:
             fixer.fix_issue(checkpoint=checkpoint)
+        else:
+            logging.debug(f"[fix_process]: Would run {fixer.__class__.__name__}")
+        phase_time = timer.end_phase()
+
+        # --- log progress ---
+        elapsed, remaining = timer.eta(i)
+        logging.info(
+            f"{fixer.__class__.__name__} finished in {phase_time:.1f}s | "
+            f"Elapsed: {elapsed/60:.1f}m | ETA: {remaining/60:.1f}m"
+        )
+
+        # --- mark fixer as done ---
+        if checkpoint:
+            checkpoint.save(fixer.__class__.__name__, "done", -1)
+            logging.info(f"{fixer.__class__.__name__} completed.")
+
+    # clear checkpoint only when the whole pipeline is done
+    logging.info("All fixing operations terminated.")
+    if checkpoint:
+        checkpoint.clear()
+    return None
+
+
+
+def fix_process_reading_from_files(
+    endpoint: str,
+    dump_dir:str,
+    issues_log_dir: str,
+    meta_dumps_pub_dates: List[Tuple[str, str]],
+    dry_run: bool = False,
+    checkpoint='checkpoint.json'
+):
+    """
+    Function wrapping all the single fix operations into a single process,
+    with strictly ordered steps, checkpointing, and timing.
+    """
+
+    checkpoint = CheckpointManager(checkpoint) # checkpoint file will be deleted if program terminates succesfully
+
+    fixers = (
+        FillerFixer(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir),
+        DateTimeFixer(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir),
+        MissingPrimSourceFixer(endpoint, meta_dumps_pub_dates, dump_dir=dump_dir, issues_log_dir=issues_log_dir),
+        MultiPAFixer(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir),
+        MultiObjectFixer(endpoint, meta_dumps_pub_dates, dump_dir=dump_dir, issues_log_dir=issues_log_dir),
+    )
+
+    timer = TimedProcess(total_phases=len(fixers))
+    timer.start()
+
+    modified_graphs_mapping = dict()  # to keep track of graphs modified by FillerFixer
+
+    for i, fixer in enumerate(fixers):
+        logging.info(f"Created instance of {fixer.__class__.__qualname__}.")
+
+        # --- resume logic: skip completed fixer ---
+        if checkpoint:
+            state = checkpoint.load()
+            if (
+                state.get("fixer") == fixer.__class__.__name__
+                and state.get("phase") == "done"
+            ):
+                logging.info(f"Skipping {fixer.__class__.__name__} (already completed).")
+                continue
+
+        # --- run fixer ---
+        timer.start_phase()
+        if not dry_run:
+            if i == 0: # i.e. FillerFixer
+                fixer.fix_issue(checkpoint=checkpoint)
+                mod_graphs_uris = load_modified_graphs_uris(fixer.issues_log_fp)
+                logging.info(f"Simulating FillerFixer changes for {len(mod_graphs_uris)} graphs...")
+                modified_graphs_mapping.update({g: simulate_ff_changes(obj) for g, obj in read_rdf_dump(dump_dir) if g in mod_graphs_uris})
+
+            else: # i.e. all other fixers
+                fixer.fix_issue(checkpoint=checkpoint, modified_graphs=modified_graphs_mapping)
+            
         else:
             logging.debug(f"[fix_process]: Would run {fixer.__class__.__name__}")
         phase_time = timer.end_phase()

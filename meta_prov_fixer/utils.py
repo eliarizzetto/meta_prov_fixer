@@ -18,6 +18,7 @@ import logging
 import tempfile
 
 
+
 def make_json_safe(obj):
     if isinstance(obj, dict):
         return {make_json_safe(k): make_json_safe(v) for k, v in obj.items()}
@@ -48,20 +49,20 @@ def get_process_paradata(instance):
         outer_frame = frame.f_back
         func_name = outer_frame.f_code.co_name
 
-        args_info = inspect.getargvalues(outer_frame)
+        # args_info = inspect.getargvalues(outer_frame)
 
-        # Build dictionary of argument name -> value, excluding 'self'
-        args_dict = {
-            arg: args_info.locals[arg]
-            for arg in args_info.args
-            if arg != 'self' and arg in args_info.locals
-        }
+        # # Build dictionary of argument name -> value, excluding 'self'
+        # args_dict = {
+        #     arg: args_info.locals[arg]
+        #     for arg in args_info.args
+        #     if arg != 'self' and arg in args_info.locals
+        # }
 
         # kwargs, if available
-        kwargs = args_info.locals.get('kwargs', {})
+        # kwargs = args_info.locals.get('kwargs', {})
 
-        safe_args = make_json_safe(args_dict)
-        safe_kwargs = make_json_safe(kwargs)
+        # safe_args = make_json_safe(args_dict)
+        # safe_kwargs = make_json_safe(kwargs)
         instance_attrs = make_json_safe(vars(instance))
 
         data = {
@@ -70,8 +71,8 @@ def get_process_paradata(instance):
             "function": func_name,
             "input": {
                 "instance_attributes": instance_attrs,
-                "args": safe_args,    # dict of arg name -> value
-                "kwargs": safe_kwargs,
+                # "args": safe_args,    # dict of arg name -> value
+                # "kwargs": safe_kwargs,
             }
         }
 
@@ -459,6 +460,7 @@ def validate_meta_dumps_pub_dates(meta_dumps_register:List[Tuple[str, str]]):
     last_date = datetime.strptime(meta_dumps_register[-1][0], r'%Y-%m-%d')
     if (datetime.now() - last_date).days > 60:
         warnings.warn(f"[validate_meta_dumps_pub_dates]: The latest Meta dump in the register ({last_date.strftime(r'%Y-%m-%d')}) is more than 2 months old. Make sure to update the register with the latest publication dates and DOIs!")
+        logging.warning(f"[validate_meta_dumps_pub_dates]: The latest Meta dump in the register ({last_date.strftime(r'%Y-%m-%d')}) is more than 2 months old. Make sure to update the register with the latest publication dates and DOIs!")
     
     for index, item in enumerate(meta_dumps_register):
         # Check type and length
@@ -634,3 +636,51 @@ class TimedProcess:
         avg = sum(self.phase_times) / len(self.phase_times) if self.phase_times else 0
         remaining = (self.total_phases - current_phase_idx - 1) * avg
         return elapsed, remaining
+
+
+def read_rdf_dump(data_dir: str) -> Generator[dict, None, None]:
+    """
+    Iterates over the files in any given directory storing OpenCitations Meta RDF files
+    provenance and yields the JSON-LD data as a list of dictionaries.
+   
+    :param data_dir: Path to the directory containing the decompressed provenance archive.
+    :yield: Dictionary corresponding to a provenance graph, in JSON-LD format.
+    """
+
+
+    for dirpath, _, filenames in os.walk(data_dir):
+        if os.path.basename(dirpath) == 'prov':
+            for fn in filenames:
+
+                fp = os.path.join(dirpath,fn)
+
+                if fp.endswith('.zip'):
+                    with ZipFile(fp) as archive:  # Handle zip files
+                        for f in archive.filelist:
+                            if f.filename.endswith('.json'):
+                                with archive.open(f.filename) as f:
+                                    data = json.load(f)
+                                    for g in data:
+                                        yield g
+
+                elif fp.endswith('.json.xz'):  # Handle lzma2 (.xz) files
+                    with lzma.open(fp, 'rt', encoding='utf-8') as f:
+                            data = json.load(f)
+                            for g in data:
+                                yield g
+                
+                elif fp.endswith('.json'):  # assumes files are already decompressed
+                    with open(fp, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        for g in data:
+                            yield g
+
+
+def load_modified_graphs_uris(stream:Union[str, Iterable]) -> set:
+    deleted = set()
+    for batch, _ in chunker(stream, 10000):
+        for g, _dict in batch:
+            deleted.add(g)
+    return deleted
+
+
