@@ -49,18 +49,10 @@ def rdflib_update(dataset:Dataset, query: str) -> None:
     dataset.update(query)
 
 
-
-TEST_DATA_FP = 'tests/data/data.trig'
-CORRECTED_DATA_FP = 'tests/data/corrected_data.trig'
-
-
-
-class TestFillerFixer(unittest.TestCase):
-
+class BaseTestCase(unittest.TestCase):
+    """Base test class to reduce boilerplate code."""
+    
     def setUp(self):
-        self.fixer = FillerFixer(
-            endpoint="http://example.org/sparql/",
-        )
         self.local_dataset = Dataset(default_union=True)
         self.local_dataset.parse(TEST_DATA_FP, format='trig')
 
@@ -76,6 +68,21 @@ class TestFillerFixer(unittest.TestCase):
         self.local_query = local_query
         self.local_update = local_update
         self.maxDiff = None
+
+
+TEST_DATA_FP = 'tests/data/data.trig'
+CORRECTED_DATA_FP = 'tests/data/corrected_data.trig'
+FAKE_DUMP_DIR = 'tests/data/fake_dump/'
+
+
+
+class TestFillerFixer(BaseTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.fixer = FillerFixer(
+            endpoint="http://example.org/sparql/"
+        )
 
     @patch.object(ProvenanceIssueFixer, '_query')
     def test_detect_issue(self, mock_query):
@@ -190,26 +197,12 @@ class TestFillerFixer(unittest.TestCase):
 
 
 
-class TestDateTimeFixer(unittest.TestCase):
+class TestDateTimeFixer(BaseTestCase):
     def setUp(self):
+        super().setUp()
         self.fixer = DateTimeFixer(
             endpoint="http://example.org/sparql/"
         )
-        self.local_dataset = Dataset(default_union=True)
-        self.local_dataset.parse(TEST_DATA_FP, format='trig')
-
-        def local_query(q):
-            """Custom function to simulate _query using local Dataset."""
-            qres = rdflib_query(self.local_dataset, q)
-            return convert_query_results(qres)
-
-        def local_update(q):
-            """Custom function to simulate _update using local Dataset."""
-            return rdflib_update(self.local_dataset, q)
-        
-        self.local_query = local_query
-        self.local_update = local_update
-        self.maxDiff = None
 
     @patch.object(ProvenanceIssueFixer, '_query')
     def test_detect_issue(self, mock_query):
@@ -239,8 +232,6 @@ class TestDateTimeFixer(unittest.TestCase):
     @patch.object(ProvenanceIssueFixer, '_update')
     @patch.object(ProvenanceIssueFixer, '_query')      
     def test_fix_issue(self, mock_query, mock_update):
-        # corrected_ds = Dataset(default_union=True)
-        # corrected_ds.parse(CORRECTED_DATA_FP, format='trig')
 
         mock_query.side_effect = self.local_query
         mock_update.side_effect = self.local_update
@@ -250,33 +241,19 @@ class TestDateTimeFixer(unittest.TestCase):
         self.fixer.fix_issue()
 
         new_quad_count = len(list(self.local_dataset.quads()))
-        # print(self.local_dataset.serialize(format='trig'))
         self.assertEqual(original_quad_count, new_quad_count)
         self.assertEqual(len(set(self.local_dataset.subjects())), 18)
 
 
-class TestMissingPrimSourceFixer(unittest.TestCase):
+
+class TestMissingPrimSourceFixer(BaseTestCase):
 
     def setUp(self):
+        super().setUp()
         self.fixer = MissingPrimSourceFixer(
-            meta_dumps_pub_dates=meta_dumps_pub_dates,
-            endpoint="http://example.org/sparql/"
+            endpoint="http://example.org/sparql/",
+            meta_dumps_pub_dates=meta_dumps_pub_dates
         )
-        self.local_dataset = Dataset(default_union=True)
-        self.local_dataset.parse(TEST_DATA_FP, format='trig')
-
-        def local_query(q):
-            """Custom function to simulate _query using local Dataset."""
-            qres = rdflib_query(self.local_dataset, q)
-            return convert_query_results(qres)
-
-        def local_update(q):
-            """Custom function to simulate _update using local Dataset."""
-            return rdflib_update(self.local_dataset, q)
-        
-        self.local_query = local_query
-        self.local_update = local_update
-        self.maxDiff = None
 
     @patch.object(ProvenanceIssueFixer, '_query')
     def test_detect_issue(self, mock_query):
@@ -321,27 +298,13 @@ class TestMissingPrimSourceFixer(unittest.TestCase):
     
 
 
-class TestMultiPAFixer(unittest.TestCase):
+class TestMultiPAFixer(BaseTestCase):
 
     def setUp(self):
+        super().setUp()
         self.fixer = MultiPAFixer(
             endpoint="http://example.org/sparql/"
         )
-        self.local_dataset = Dataset(default_union=True)
-        self.local_dataset.parse(TEST_DATA_FP, format='trig')
-
-        def local_query(q):
-            """Custom function to simulate _query using local Dataset."""
-            qres = rdflib_query(self.local_dataset, q)
-            return convert_query_results(qres)
-
-        def local_update(q):
-            """Custom function to simulate _update using local Dataset."""
-            return rdflib_update(self.local_dataset, q)
-        
-        self.local_query = local_query
-        self.local_update = local_update
-        self.maxDiff = None
     
     @patch.object(ProvenanceIssueFixer, '_query')
     def test_detect_issue(self, mock_query):
@@ -387,28 +350,14 @@ class TestMultiPAFixer(unittest.TestCase):
         qres = qres.askAnswer
         self.assertFalse(qres)
 
-class TestMultiObjectFixer(unittest.TestCase):
+class TestMultiObjectFixer(BaseTestCase):
     
     def setUp(self):
+        super().setUp()
         self.fixer = MultiObjectFixer(
-            meta_dumps_pub_dates=meta_dumps_pub_dates,
-            endpoint="http://example.org/sparql/"
+            endpoint="http://example.org/sparql/",
+            meta_dumps_pub_dates=meta_dumps_pub_dates
         )
-        self.local_dataset = Dataset(default_union=True)
-        self.local_dataset.parse(TEST_DATA_FP, format='trig')
-
-        def local_query(q):
-            """Custom function to simulate _query using local Dataset."""
-            qres = rdflib_query(self.local_dataset, q)
-            return convert_query_results(qres)
-
-        def local_update(q):
-            """Custom function to simulate _update using local Dataset."""
-            return rdflib_update(self.local_dataset, q)
-        
-        self.local_query = local_query
-        self.local_update = local_update
-        self.maxDiff = None
 
     @patch.object(ProvenanceIssueFixer, '_query')
     def test_detect_issue(self, mock_query):
@@ -458,27 +407,13 @@ class TestMultiObjectFixer(unittest.TestCase):
         self.assertFalse(qres)
 
 
-class TestFixProcess(unittest.TestCase):
+class TestFixProcess(BaseTestCase):
     def setUp(self):
-        self.meta_dumps_pub_dates = meta_dumps_pub_dates
+        super().setUp()
         self.sparql_endpoint = "http://example.org/sparql/"
+        self.meta_dumps_pub_dates = meta_dumps_pub_dates
         self.dry_run = False
-
-        self.local_dataset = Dataset(default_union=True)
-        self.local_dataset.parse(TEST_DATA_FP, format='trig')
-
-        def local_query(q):
-            """Custom function to simulate _query using local Dataset."""
-            qres = rdflib_query(self.local_dataset, q)
-            return convert_query_results(qres)
-
-        def local_update(q):
-            """Custom function to simulate _update using local Dataset."""
-            return rdflib_update(self.local_dataset, q)
-        
-        self.local_query = local_query
-        self.local_update = local_update
-        self.maxDiff = None
+        self.fake_dump_dir = FAKE_DUMP_DIR
 
     def tearDown(self):
         log_dir = 'tests/data/fix_process_log'
@@ -552,6 +487,35 @@ class TestFixProcess(unittest.TestCase):
 
         # Assert serialized forms are equal
         self.assertEqual(actual_serialized.strip(), expected_serialized.strip())
+    
+    @patch.object(ProvenanceIssueFixer, '_update')
+    def test_fix_process_reading_from_files(self, mock_update):
+        expected_ds = Dataset(default_union=True)
+        expected_ds.parse(CORRECTED_DATA_FP, format='trig')
+
+        mock_update.side_effect = self.local_update
+
+        fix_process_reading_from_files(
+            self.sparql_endpoint,
+            self.fake_dump_dir,
+            'tests/data/fix_process_log',
+            self.meta_dumps_pub_dates,
+            dry_run=self.dry_run,
+        )
+
+        self.assertEqual(
+            len(list(self.local_dataset.objects(URIRef('https://w3id.org/oc/meta/br/0610491907/prov/se/1'), None))),
+            7
+        )
+        self.assertEqual(len(set(self.local_dataset.subjects())), 13)
+
+        # Serialize and normalize both datasets
+        actual_serialized = self.normalize_datetime_literals(self.local_dataset.serialize(format='trig'))
+        expected_serialized = self.normalize_datetime_literals(expected_ds.serialize(format='trig'))
+
+        # Assert serialized forms are equal
+        self.assertEqual(actual_serialized.strip(), expected_serialized.strip())
+
 
 
 

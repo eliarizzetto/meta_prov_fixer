@@ -79,7 +79,7 @@ def main():
 
     logging.info("Starting provenance fixing pipeline...")
     logging.info(f"Endpoint: {args.endpoint}")
-    logging.info(f"Dump dir: {args.dump_dir or 'None (will use SPARQL endpoint)'}")
+    logging.info(f"Dump dir: {args.dump_dir or 'None (will use SPARQL endpoint for error detection)'}")
     logging.info(f"Issues log dir: {args.issues_log_dir}")
     logging.info(f"Checkpoint: {args.checkpoint}")
     logging.info(f"Dry run: {args.dry_run}")

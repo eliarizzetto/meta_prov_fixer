@@ -111,6 +111,8 @@ class ProvenanceIssueFixer:
         self.sparql.setReturnFormat(JSON)
         self.sparql.setMethod(POST)
         self.checkpoint = CheckpointManager(checkpoint)
+        self.failed_queries_fp = f'prov_fix_failed_queries_{datetime.today().strftime('%Y-%m-%d')}.txt'
+        
         if issues_log_dir:
             self.issues_log_fp = os.path.join(issues_log_dir, f"{type(self).__qualname__}.jsonl")
         else:
@@ -149,6 +151,8 @@ interrupted while writing on it. It will be overwritten.")
                     time.sleep(delay)
                 else:
                     logging.error("Max retries reached. Update failed.")
+                    with open(self.failed_queries_fp, "a") as f:
+                        f.write(update_query.replace("\n", "\\n") + "\n")
 
     def _paginate_query(self, query_template: str, limit: int = 100000, sleep: float = 0.5) -> Generator[List[Dict[str, Any]], None, None]:
         """
@@ -1567,7 +1571,7 @@ def fix_process_reading_from_files(
                 fixer.fix_issue(checkpoint=checkpoint)
                 mod_graphs_uris = load_modified_graphs_uris(fixer.issues_log_fp)
                 logging.info(f"Simulating FillerFixer changes for {len(mod_graphs_uris)} graphs...")
-                modified_graphs_mapping.update({g: simulate_ff_changes(obj) for g, obj in read_rdf_dump(dump_dir) if g in mod_graphs_uris})
+                modified_graphs_mapping.update({g['@id']: simulate_ff_changes(g) for g in read_rdf_dump(dump_dir) if g['@id'] in mod_graphs_uris})
 
             else: # i.e. all other fixers
                 fixer.fix_issue(checkpoint=checkpoint, modified_graphs=modified_graphs_mapping)
