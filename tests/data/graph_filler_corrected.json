@@ -1,0 +1,75 @@
+{
+    "@graph": [
+        {
+            "@id": "https://w3id.org/oc/meta/br/06104055879/prov/se/2",
+            "@type": [
+                "http://www.w3.org/ns/prov#Entity"
+            ],
+            "http://purl.org/dc/terms/description": [
+                {
+                    "@value": "The entity 'https://w3id.org/oc/meta/br/06104055879' has been modified."
+                }
+            ],
+            "http://www.w3.org/ns/prov#generatedAtTime": [
+                {
+                    "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+                    "@value": "2023-12-23T21:19:37+00:00"
+                }
+            ],
+            "http://www.w3.org/ns/prov#specializationOf": [
+                {
+                    "@id": "https://w3id.org/oc/meta/br/06104055879"
+                }
+            ],
+            "http://www.w3.org/ns/prov#wasAttributedTo": [
+                {
+                    "@id": "https://w3id.org/oc/meta/prov/pa/1"
+                }
+            ],
+            "http://www.w3.org/ns/prov#wasDerivedFrom": [
+                {
+                    "@id": "https://w3id.org/oc/meta/br/06104055879/prov/se/1"
+                }
+            ],
+            "https://w3id.org/oc/ontology/hasUpdateQuery": [
+                {
+                    "@value": "DELETE DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06104055879> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/06103724005> . } }; INSERT DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06104055879> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/06901448282> . } }"
+                }
+            ]
+        },
+        {
+            "@id": "https://w3id.org/oc/meta/br/06104055879/prov/se/1",
+            "@type": [
+                "http://www.w3.org/ns/prov#Entity"
+            ],
+            "http://purl.org/dc/terms/description": [
+                {
+                    "@value": "The entity 'https://w3id.org/oc/meta/br/06104055879' has been created."
+                }
+            ],
+            "http://www.w3.org/ns/prov#generatedAtTime": [
+                {
+                    "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+                    "@value": "2023-12-13T14:56:35.303622"
+                }
+            ],
+            "http://www.w3.org/ns/prov#invalidatedAtTime": [
+                {
+                    "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+                    "@value": "2023-12-23T21:19:37+00:00"
+                }
+            ],
+            "http://www.w3.org/ns/prov#specializationOf": [
+                {
+                    "@id": "https://w3id.org/oc/meta/br/06104055879"
+                }
+            ],
+            "http://www.w3.org/ns/prov#wasAttributedTo": [
+                {
+                    "@id": "https://w3id.org/oc/meta/prov/pa/1"
+                }
+            ]
+        }
+    ],
+    "@id": "https://w3id.org/oc/meta/br/06104055879/prov/"
+}

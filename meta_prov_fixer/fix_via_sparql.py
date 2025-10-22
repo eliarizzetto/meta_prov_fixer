@@ -83,7 +83,7 @@ def simulate_ff_changes(local_named_graph:dict) -> dict:
         if len(graph_object) > 1:
             raise ValueError("The input named graph seems to contain multiple graphs!")
         
-        result = graph_object[0] # return the dict inside the list
+        result = graph_object[0]
         return result
     
     finally:
@@ -1469,7 +1469,7 @@ def fix_process(
     with strictly ordered steps, checkpointing, and timing.
     """
 
-    checkpoint = CheckpointManager(checkpoint) # checkpoint file will be deleted if program terminates succesfully
+    ckpt_mngr = CheckpointManager(checkpoint) # checkpoint file will be deleted if program terminates succesfully
 
     fixers = (
         FillerFixer(endpoint, issues_log_dir=issues_log_dir),
@@ -1486,8 +1486,8 @@ def fix_process(
         logging.info(f"Created instance of {fixer.__class__.__qualname__}.")
 
         # --- resume logic: skip completed fixer ---
-        if checkpoint:
-            state = checkpoint.load()
+        if ckpt_mngr:
+            state = ckpt_mngr.load()
             if (
                 state.get("fixer") == fixer.__class__.__name__
                 and state.get("phase") == "done"
@@ -1498,7 +1498,7 @@ def fix_process(
         # --- run fixer ---
         timer.start_phase()
         if not dry_run:
-            fixer.fix_issue(checkpoint=checkpoint)
+            fixer.fix_issue(checkpoint=ckpt_mngr)
         else:
             logging.debug(f"[fix_process]: Would run {fixer.__class__.__name__}")
         phase_time = timer.end_phase()
@@ -1511,14 +1511,14 @@ def fix_process(
         )
 
         # --- mark fixer as done ---
-        if checkpoint:
-            checkpoint.save(fixer.__class__.__name__, "done", -1)
+        if ckpt_mngr:
+            ckpt_mngr.save(fixer.__class__.__name__, "done", -1)
             logging.info(f"{fixer.__class__.__name__} completed.")
 
     # clear checkpoint only when the whole pipeline is done
     logging.info("All fixing operations terminated.")
-    if checkpoint:
-        checkpoint.clear()
+    if ckpt_mngr:
+        ckpt_mngr.clear()
     return None
 
 
@@ -1536,7 +1536,7 @@ def fix_process_reading_from_files(
     with strictly ordered steps, checkpointing, and timing.
     """
 
-    checkpoint = CheckpointManager(checkpoint) # checkpoint file will be deleted if program terminates succesfully
+    ckpt_mngr = CheckpointManager(checkpoint) # checkpoint file will be deleted if program terminates succesfully
 
     fixers = (
         FillerFixer(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir),
@@ -1555,8 +1555,8 @@ def fix_process_reading_from_files(
         logging.info(f"Created instance of {fixer.__class__.__qualname__}.")
 
         # --- resume logic: skip completed fixer ---
-        if checkpoint:
-            state = checkpoint.load()
+        if ckpt_mngr:
+            state = ckpt_mngr.load()
             if (
                 state.get("fixer") == fixer.__class__.__name__
                 and state.get("phase") == "done"
@@ -1568,13 +1568,13 @@ def fix_process_reading_from_files(
         timer.start_phase()
         if not dry_run:
             if i == 0: # i.e. FillerFixer
-                fixer.fix_issue(checkpoint=checkpoint)
+                fixer.fix_issue(checkpoint=ckpt_mngr)
                 mod_graphs_uris = load_modified_graphs_uris(fixer.issues_log_fp)
                 logging.info(f"Simulating FillerFixer changes for {len(mod_graphs_uris)} graphs...")
                 modified_graphs_mapping.update({g['@id']: simulate_ff_changes(g) for g in read_rdf_dump(dump_dir) if g['@id'] in mod_graphs_uris})
 
             else: # i.e. all other fixers
-                fixer.fix_issue(checkpoint=checkpoint, modified_graphs=modified_graphs_mapping)
+                fixer.fix_issue(checkpoint=ckpt_mngr, modified_graphs=modified_graphs_mapping)
             
         else:
             logging.debug(f"[fix_process]: Would run {fixer.__class__.__name__}")
@@ -1588,12 +1588,12 @@ def fix_process_reading_from_files(
         )
 
         # --- mark fixer as done ---
-        if checkpoint:
-            checkpoint.save(fixer.__class__.__name__, "done", -1)
+        if ckpt_mngr:
+            ckpt_mngr.save(fixer.__class__.__name__, "done", -1)
             logging.info(f"{fixer.__class__.__name__} completed.")
 
     # clear checkpoint only when the whole pipeline is done
     logging.info("All fixing operations terminated.")
-    if checkpoint:
-        checkpoint.clear()
+    if ckpt_mngr:
+        ckpt_mngr.clear()
     return None

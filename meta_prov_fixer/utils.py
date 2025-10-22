@@ -163,7 +163,9 @@ def normalise_datetime(datetime_str: str) -> str:
     """
     Normalise a datetime string (offset naive or aware, with or without microseconds) making it a UTC-aware ISO 8601 datetime string with no microseconds specified.
 
-    When converting from offset-naive to offset-aware (where necessary), Italian timezone is assumed. UTC is made explicit as 'Z' (not '+00:00'). If input string contains the explicit xsd datatype (^^xsd:string, ^^xsd:dateTime, ^^http://www.w3.org/2001/XMLSchema#dateTime, or ^^http://www.w3.org/2001/XMLSchema#string), the substring representing the datatype is silently removed.
+    When converting from offset-naive to offset-aware (where necessary), Italian timezone is assumed. UTC is made explicit as 'Z' (not '+00:00'). 
+      input string contains the explicit xsd datatype (^^xsd:string, ^^xsd:dateTime, ^^http://www.w3.org/2001/XMLSchema#dateTime, or 
+      ^^http://www.w3.org/2001/XMLSchema#string), the substring representing the datatype is silently removed.
 
     :param datetime_str: Datetime string, possibly as a timestamp.
     :type datetime_str: str
@@ -333,8 +335,10 @@ def get_described_res_omid(prov_uri: str) -> str:
     """
     if prov_uri.endswith('/prov/'):
         return prov_uri.replace("/prov/", '')
-    else:
+    elif '/prov/se/' in prov_uri and prov_uri[-1].isdigit():
         return prov_uri.rsplit("/prov/se/", 1)[0]
+    else:
+        raise Exception("The input URI is not a valid URI for a prov:Entity resource or a provenance named graph.") 
     
     
 def get_seq_num(se_uri: str) -> Union[int, None]:
@@ -348,7 +352,8 @@ def get_seq_num(se_uri: str) -> Union[int, None]:
     """
     if se_uri[-1].isdigit():
         return int(se_uri.split('/')[-1])
-    return None
+    else:
+        raise Exception("Sequence number not found in URI") 
 
 def remove_seq_num(se_uri:str) -> str:
     """
@@ -382,7 +387,10 @@ def get_graph_uri_from_se_uri(se_uri:str) -> str:
     :returns: The URI of the provenance named graph.
     :rtype: str
     """
-    return se_uri.split('se/', 1)[0]
+    if '/prov/se/' in se_uri:
+        return se_uri.split('se/', 1)[0]
+    else:
+        raise Exception(f"Invalid URI: {se_uri}")
 
 def get_previous_meta_dump_uri(meta_dumps_pub_dates, dt:str)-> str:
     """
@@ -640,8 +648,8 @@ class TimedProcess:
 
 def read_rdf_dump(data_dir: str) -> Generator[dict, None, None]:
     """
-    Iterates over the files in any given directory storing OpenCitations Meta RDF files
-    provenance and yields the JSON-LD data as a list of dictionaries.
+    Iterates over the files in any given directory storing OpenCitations Meta RDF **PROVENANCE** files
+    and yields the JSON-LD data as a list of dictionaries.
    
     :param data_dir: Path to the directory containing the decompressed provenance archive.
     :yield: Dictionary corresponding to a provenance graph, in JSON-LD format.
@@ -670,6 +678,10 @@ def read_rdf_dump(data_dir: str) -> Generator[dict, None, None]:
                                 yield g
                 
                 elif fp.endswith('.json'):  # assumes files are already decompressed
+                    # continue if there is a compressed file with the same name in the same directory
+                    if os.path.exists(fp + '.xz') or os.path.exists(fp.removesuffix('.json') + '.zip'):
+                        continue
+                    
                     with open(fp, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                         for g in data:

@@ -74,6 +74,36 @@ TEST_DATA_FP = 'tests/data/data.trig'
 CORRECTED_DATA_FP = 'tests/data/corrected_data.trig'
 FAKE_DUMP_DIR = 'tests/data/fake_dump/'
 
+class TestSimulateFFChanges(unittest.TestCase):
+    def setUp(self):
+        self.maxDiff = None
+
+    def test_simulate_ff_changes(self):
+        # with open('tests/data/graph_with_filler.json') as f:
+        #     test_data = json.load(f)
+        # Parse the test data into a Dataset
+        test_dataset = Dataset(default_union=True)
+        test_dataset.parse(source='tests/data/graph_with_filler.json', format='json-ld')
+
+        # Convert the dataset to JSON-LD formatted dictionary as expected by simulate_ff_changes
+        test_graph_json_ld = json.loads(test_dataset.serialize(format='json-ld'))
+
+        self.assertEqual(len(test_graph_json_ld), 1)
+        local_named_graph = test_graph_json_ld[0]
+
+        # Call simulate_ff_changes
+        result = simulate_ff_changes(local_named_graph)
+
+        # Basic checks
+        self.assertIsInstance(result, dict)
+        self.assertIn('@id', result)
+        self.assertIn('@graph', result)
+
+        exp = Dataset(default_union=True)
+        exp.parse(source='tests/data/graph_filler_corrected.json')
+        
+        expected_res = json.loads(exp.serialize(format='json-ld'))[0]  # rdflib.Dataset is a LIST of graphs
+        self.assertEqual(json.dumps(result), json.dumps(expected_res))
 
 
 class TestFillerFixer(BaseTestCase):
