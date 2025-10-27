@@ -1,78 +1,102 @@
-è necessario che ci sia una funzione separata che si occupa solo della correzione, presi in input i dati da correggere. fix_issue() magari può diventare la funzione che le accorpa insieme (così non bisogna modificare i tests?).fix_issue() chiamerebbe le funzioni separate tenendo presente il checkpoint. **FORSE NON è NECESSARIO**.
+# meta-prov-fixer
 
+A small toolkit and pipeline to detect and fix provenance issues in the OpenCitations "Meta" dataset.
 
-1. Il checkpoint diventa un attributo della classe madre ProvenanceFixer (checkpoint=CheckpointManager("prov_fix_ckp.json")).
+This repository provides a set of fixers that run detection queries (either against a SPARQL endpoint or reading local RDF dump files) and apply corrective updates to the triplestore. The pipeline coordinates the fixers, supports checkpointing, logging and a dry-run mode for safe testing.
 
-2. Quando un detect_issue() viene ultimato correttamente, si salva un checkpoint che dice che la fase di detect di un determinato fixer è stata completata. Se invece ci sono interruzioni durante la fase di detect, non viene scritto niente. Questo può essere fatto all'interno di fix_issue!
+## Features
 
-3. checkpointed_batch rimane così com'è (?)
+- Pipeline orchestration (ordered fixers with checkpointing and timing)
+- Multiple fixers implemented:
+  - `FillerFixer` — remove filler snapshots and rename/adjust remaining snapshots
+  - `DateTimeFixer` — normalize ill-formed datetime values (make them offset-aware with a consistent format and remove microseconds)
+  - `MissingPrimSourceFixer` — add primary source quads for creation snapshots missing them
+  - `MultiPAFixer` — normalize snapshots with multiple `prov:wasAttributedTo` values
+  - `MultiObjectFixer` — reset graphs where snapshots have too many objects for single-valued properties (creating a new creation snapshot)
 
-4. fix_issue() tiene in considerazione il checkpoint prima di lanciare eventualmente detect_issue(): se la fase di detect è ultimata, la salta (e avvisa l'utente con un warning o con un info nel log); se invece il processo si è interrotto nella fase di correzione, riprende dal batch successivo a quello in cui si è interrotto il processo.
+- Two operating modes:
+  - SPARQL endpoint mode (detect issues by querying an endpoint and apply fixes)
+  - File-based detection mode (read RDF/JSON-LD dumps locally for detection and still apply fixes to the endpoint)
 
-5. fix_process() semplicemente chiama i fix_issue() di ciascun fixer in sequenza, poi se si giunge senza errori o interruzioni alla fine di fix_process, il checkpoint viene silenziosamente eliminato.
+## Requirements
 
+The project uses Python 3.11 (see `pyproject.toml`). Key runtime dependencies are:
 
+- rdflib
+- SPARQLWrapper
+- tqdm
+- tzdata
 
+Note: the project provides development dependencies (pytest, notebook, pandas) in `pyproject.toml`.
 
+## Quick usage
 
-3277432
-37702
+The main CLI entrypoint is `meta_prov_fixer/main.py`. It accepts the following options (brief):
 
+- `-e, --endpoint` (required) — SPARQL endpoint URL to update.
+- `-m, --meta-dumps` (required) — Path to a JSON file containing a list of published meta-dump records; this must be a JSON list of 2-item arrays: `["YYYY-MM-DD", "<dump-doi-or-url>"]`.
+- `-i, --issues-log-dir` — Directory where detected issues (JSON Lines) will be written. Required when `--dump-dir` is used.
+- `-d, --dump-dir` — If provided, detection will read RDF dump files from this directory instead of querying the SPARQL endpoint.
+- `-c, --checkpoint` — Path to a checkpoint file (default: `checkpoint.json`).
+- `--dry-run` — Run pipeline in dry-run mode (no updates applied; useful for debugging).
+- `-l, --log-fp` — File path for pipeline logs. Defaults to `provenance_fix_<today>.log`.
 
+Examples:
 
-Il DB Virtuoso deve essere configurato in virtuoso.ini, nella sezione **SPARQL** con un valore di MaxResultRows superiore o uguale al LIMIT delle query SELECT, altrimenti vengono persi dei risultati. 
+Detect issues from the SPARQL endpoint and apply fixes (only applicable with small datasets, due to memory limits):
 
+```shell
+python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json
+```
 
+Detect issues from the SPARQL endpoint, save them to disk, and apply fixes:
 
-Da documentazione di virutoso.ini (https://docs.openlinksw.com/virtuoso/ch-server/#ini_sparql):
+```shell
+python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json -i ./data_to_fix
+```
 
+Detect issues by reading RDF dump files, store issues to disk, then apply fixes to the endpoint (particularly useful with large datasets):
 
-[SPARQL]
+```shell
+python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json -i ./data_to_fix -d C:/path/to/rdf/dumps
+```
 
-* ResultSetMaxRows = number .  This setting is used to limit the number of the rows in the result. The effective limit will be the lowest of this setting, SPARQL query 'LIMIT' clause value (if present), and SPARQL Endpoint request URI &maxrows parameter value (if present).
+## Input format for `--meta-dumps`
 
-* MaxQueryCostEstimationTime = seconds .  This setting is used to limit the estimate time cost of the query to certain number of seconds, the default is no limit.
+The `--meta-dumps` argument expects a JSON file containing a top-level array of two-item arrays (date and URL). Example (`meta_dumps.json`):
 
-* MaxQueryExecutionTime = seconds .  This setting is used to set the transaction execution timeout to certain limit in number of seconds, the default is no limit.
+```json
+[
+  ["2022-12-19", "https://doi.org/10.6084/m9.figshare.21747536.v1"],
+  ["2022-12-20", "https://doi.org/10.6084/m9.figshare.21747536.v2"],
+  ["2023-02-15", "https://doi.org/10.6084/m9.figshare.21747536.v3"],
+  ["2023-06-28", "https://doi.org/10.6084/m9.figshare.21747536.v4"],
+  ["2023-10-26", "https://doi.org/10.6084/m9.figshare.21747536.v5"],
+  ["2024-04-06", "https://doi.org/10.6084/m9.figshare.21747536.v6"],
+  ["2024-06-17", "https://doi.org/10.6084/m9.figshare.21747536.v7"],
+  ["2025-02-02", "https://doi.org/10.6084/m9.figshare.21747536.v8"],
+  ["2025-06-06", "https://doi.org/10.5281/zenodo.15855112"]
+]
+```
 
+The date format must be ISO-style (YYYY-MM-DD). The CLI loader validates the structure and will raise an error for invalid files.
 
----------------------------------------
+## Output and logging
 
-**Il parametro "ResultSetMaxRows" nella sezione [Parameters] di virtuoso.ini secondo me non fa niente, perché è un parametro per la sezione [SPARQL], non per la sezione [Parameters] (non è documentato per la sezione [Parameters]). In virtuoso_utilities viene configurato a 100'000, ma solo per la sezione [Parameters]: questo valore viene poi "sovrascritto" (in realtà, credo, semplicemente ignorato) in favore del valore di default della sezione [SPARQL], che è 10'000!**. Vedi queste righe di codice: 
+- A log file is written to the path supplied with `-l/--log-fp` (default includes date in filename).
+- When `--issues-log-dir` is provided, each fixer writes detected issues as JSON Lines files to that directory. Following fixes will stream-read these files for updating the endpoint.
+- A checkpoint file (default: `checkpoint.json`) is used to resume the pipeline if interrupted. The pipeline clears the checkpoint after successful completion.
 
-* https://github.com/opencitations/virtuoso_utilities/blob/c64de093894cb7f8aca7b6f61989ab91040c2154/virtuoso_utilities/launch_virtuoso.py#L27
-* https://github.com/opencitations/virtuoso_utilities/blob/c64de093894cb7f8aca7b6f61989ab91040c2154/virtuoso_utilities/launch_virtuoso.py#L598
-* https://github.com/opencitations/virtuoso_utilities/blob/c64de093894cb7f8aca7b6f61989ab91040c2154/virtuoso_utilities/launch_virtuoso.py#L617
+## Project layout
 
------------------------------------------
+- `meta_prov_fixer/` — package code
+  - `main.py` — CLI entrypoint and argument parsing (this file)
+  - `fix_via_sparql.py` — fixer implementations and the pipeline orchestration (detection and update logic)
+  - `utils.py` — shared helpers (checkpoint management, RDF dump reading, small utilities)
+- `tests/` — unit tests (pytest)
 
-MaxSortedTopRows = 10000.  The TOP select statement clause caches in memory the rows pertinent to the result. The number of rows allowed to be cached within memory is limited by this parameter.
+## Developer notes
 
-Simple example using OFFSET and LIMIT:
-
-Virtuoso uses a zero index in the OFFSET. Thus in the example below, will be taken position at record 9000 in the result set, and will get the next 1000 rows starting from 9001 record. Note that the MaxSortedTopRows in parameters Virtuoso ini section needs to be increased (default is 10000).
-
-    select ?name
-    ORDER BY ?name
-    OFFSET 9000
-    LIMIT 1000
-
-
-
-
-
-
-# TODO
-* prova il detect con LIMIT 10'000, vedi se ci sono tutte le righe e  MaxSortedTopRows si comporta bene. 
-* poi prova il detect con un LIMIT più alto ma alzando solo ResultSetMaxRows nella sezione [SPARQL], lasciando  così com'è.
-    * il mio dubbio è che MaxSortedTopRows sia già gestito (rispetto al ritornare tutti i risultati, non rispetto all'efficienza) dallo scrollable cursor (praticamente, la subquery indicata qui: https://vos.openlinksw.com/owiki/wiki/VOS/VirtTipsAndTricksHowToHandleBandwidthLimitExceed), e credo invece che il problema stia nel fatto che i risultati della query siano limitati da ResultSetMaxRows. Anche se il limit della query è iù alto, Virutoso ritorna il limite configurato in INI senza dire che mancano delle righe nei risultati. In altre parole, per ogni singla query della paginazione, se il LIMIT della query è più alto del valore di [SPARQL]ResultSetMaxRows in INI, Virtuoso ritorna comunque solo _N_ risultati (dove _N_ == [SPARQL]ResultSetMaxRows in INI), senza dire niente. Ad esempio, se LIMIT==100'000 e SPARQL]ResultSetMaxRows==10'000, e mi aspetto 1'000'000 risultati, Virtuoso farà comunque 1000000/100000=**10** query, ma per ogni query ritornerà solo i primi 10000 risultati, arrivando in totale a 100000 risultati e lasciandone fuori 900'000.
-* se non funziona (anche senza dare errori), cioè se non tutte le righe del count sono presenti, considera di usare la keyset pagination. Vedi anche quanto tempo ci mette
-
-
-
-**NB**: Non mi è chiaro se Virtuoso, anche con le subqueries indicate [qui](https://vos.openlinksw.com/owiki/wiki/VOS/VirtTipsAndTricksHowToHandleBandwidthLimitExceed), deve materializzare _TUTTI_ i risultati prima di ordinarli. Se consì fosse, potrebbe comunque non bastare la memoria. In tal caso, bisognerebbe davvero riscrivere il codice usato una keyset pagination (sempre che quella funzioni).
-
-
-Vedi qui per keyset pagination di esempio:
-https://chatgpt.com/c/68de9973-e948-8331-b9af-c2064107134b
-
+- Use `--dry-run` to validate detection and simulate the pipeline without executing queries.
+- When using file-based detection (`--dump-dir`), supply `--issues-log-dir` so detected issues are stored as JSONL files; those files can be inspected or edited and then used by the same pipeline to apply updates.
+- The pipeline uses a per-fixer checkpointing mechanism so long-running runs can be resumed after interruptions.
