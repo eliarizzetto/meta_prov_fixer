@@ -74,8 +74,8 @@ def simulate_ff_changes(local_named_graph:dict) -> dict:
             """Custom function to simulate _update using local Dataset."""
             return rdflib_update(local_dataset, q)
         
-        fake_ff._query = local_query  # overwrite _query
-        fake_ff._update = local_update  # overwrite _update
+        fake_ff._query = local_query  # overwrite FillerFixer._query()
+        fake_ff._update = local_update  # overwrite FillerFixer._update()
 
         fake_ff.fix_issue()
 
@@ -92,17 +92,17 @@ def simulate_ff_changes(local_named_graph:dict) -> dict:
 
 
 class ProvenanceIssueFixer:
-    def __init__(self, endpoint: str, dump_dir:Union[list, None]=None, issues_log_dir:Union[str, None]=None, checkpoint='checkpoint.json'):
+    def __init__(self, endpoint: str, dump_dir:Union[str, None]=None, issues_log_dir:Union[str, None]=None, checkpoint='checkpoint.json'):
         """
         Base class for fixing provenance issues via SPARQL queries.
         Initializes the SPARQL endpoint and sets up the query method.
         Classes dedicated to fixing specific issues should inherit from this class and implement the `detect_issue` and `fix_issue` methods.
         
-        :param sparql_endpoint: The SPARQL endpoint URL.
-        :type sparql_endpoint: str
-        :param dump_dir: Path to the directory storing the JSON-LD dump files for provenance (default: None).
+        :param endpoint: The SPARQL endpoint URL.
+        :param dump_dir: Path to the directory storing the JSON-LD dump files for provenance. 
+            If provided, the fixer will read from these files in the error detection phase(instead of querying the SPARQL endpoint directly) (default: None).
         :param issues_log_dir: If provided, the path to the directory where the data involved in a query-detected issue will be logged. If None, data is kept in memory.
-        :type issues_log_fp: Union[str, None]
+        :param checkpoint: Path to the checkpoint file for resuming interrupted processes (default: 'checkpoint.json').
         """
 
         self.endpoint = endpoint
@@ -111,7 +111,7 @@ class ProvenanceIssueFixer:
         self.sparql.setReturnFormat(JSON)
         self.sparql.setMethod(POST)
         self.checkpoint = CheckpointManager(checkpoint)
-        self.failed_queries_fp = f'prov_fix_failed_queries_{datetime.today().strftime('%Y-%m-%d')}.txt'
+        self.failed_queries_fp = f"prov_fix_failed_queries_{datetime.today().strftime('%Y-%m-%d')}.txt"
         
         if issues_log_dir:
             self.issues_log_fp = os.path.join(issues_log_dir, f"{type(self).__qualname__}.jsonl")
@@ -119,9 +119,6 @@ class ProvenanceIssueFixer:
             self.issues_log_fp = None
 
         if self.issues_log_fp:
-            if os.path.exists(self.issues_log_fp):
-                logging.warning(f"The issues log file {self.issues_log_fp} already exists but process was \
-interrupted while writing on it. It will be overwritten.")
             os.makedirs(os.path.dirname(self.issues_log_fp), exist_ok=True)
 
     def _query(self, query: str, retries: int = 3, delay: float = 2.0) -> Union[dict, None]:
@@ -154,7 +151,7 @@ interrupted while writing on it. It will be overwritten.")
                     with open(self.failed_queries_fp, "a") as f:
                         f.write(update_query.replace("\n", "\\n") + "\n")
 
-    def _paginate_query(self, query_template: str, limit: int = 100000, sleep: float = 0.5) -> Generator[List[Dict[str, Any]], None, None]:
+    def _paginate_query(self, query_template: str, limit: int = 10000, sleep: float = 0.5) -> Generator[List[Dict[str, Any]], None, None]:
         """
         Executes a paginated SPARQL SELECT query and yields result bindings in batches.
 
@@ -164,7 +161,7 @@ interrupted while writing on it. It will be overwritten.")
 
         :param query_template: A SPARQL query string with two `%d` placeholders for offset and limit values (in that order).
         :type query_template: str
-        :param limit: The number of results to fetch per page. Defaults to 100000.
+        :param limit: The number of results to fetch per page. Defaults to 10000.
         :type limit: int
         :param sleep: Number of seconds to wait between successive queries to avoid overwhelming the endpoint. Defaults to 0.5 seconds.
         :type sleep: float
@@ -199,7 +196,7 @@ interrupted while writing on it. It will be overwritten.")
 # (1) Delete filler snapshots and fix the rest of the graph -> move to daughter class FillerFixer
 class FillerFixer(ProvenanceIssueFixer):
     """
-    A class to fix issues related to filler snapshots in the OpenCitations Meta graph.
+    A class to fix issues related to filler snapshots in the OpenCitations Meta provenance dataset.
     """
     def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None):
         super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
@@ -210,7 +207,8 @@ class FillerFixer(ProvenanceIssueFixer):
 
         :param limit: The number of results to fetch per page.
         :type limit: int
-        :returns: A list of tuples, where the first element is a graph URI and the second element is a dictionary with 'to_delete' and 'remaining_snapshots' as keys and a set as value of both keys.
+        :returns: A list of tuples, where the first element is a graph URI and the second element is a 
+            dictionary with 'to_delete' and 'remaining_snapshots' as keys and a set as value of both keys.
         :rtype: List[Tuple[str, Dict[str, Set[str]]]]
         """
         grouped_result = defaultdict(lambda: {'to_delete': set(), 'remaining_snapshots': set()})
@@ -283,6 +281,9 @@ class FillerFixer(ProvenanceIssueFixer):
         return list(dict(grouped_result).items()) if not self.issues_log_fp else None
     
     def detect_issue_from_files(self):
+        """
+        Detect filler snapshots by reading local JSON-LD dump files instead of querying the SPARQL endpoint directly.
+        """
 
         grouped_result = defaultdict(lambda: {'to_delete': set(), 'remaining_snapshots': set()})
 
@@ -339,8 +340,11 @@ class FillerFixer(ProvenanceIssueFixer):
     def batch_delete_filler_snapshots(self, deletions: Union[str, List[Tuple[str, Dict[str, Set[str]]]]], batch_size=200, checkpoint=None) -> None:
         """
         Deletes snapshots from the triplestore based on the provided deletions list.
-        :param deletions: A list of tuples where the first element is a graph URI,  and the second is a dictionary with 'to_delete' and 'remaining_snapshots' sets.
-        :type deletions: List[Tuple[str, Dict[str, Set[str]]]]
+
+        :param deletions: A list object or the string filepath to a JSON file storing the object. 
+            Each item/line is a tuple where the first element is a graph URI, 
+            and the second is a dictionary with `'to_delete'` and `'remaining_snapshots'` sets.
+        :type deletions: Union[str, List[Tuple[str, Dict[str, Set[str]]]]]
         """
 
         template = Template("""
@@ -378,7 +382,7 @@ class FillerFixer(ProvenanceIssueFixer):
     @staticmethod
     def map_se_names(to_delete:set, remaining: set) -> dict:
         """
-        For each snapshot in the union of ``to_delete`` and ``remaining`` (containing snapshot URIs), generates a new URI.
+        Associates a new URI value to each snapshot URI in the union of ``to_delete`` and ``remaining`` (containing snapshot URIs).
 
         Values in the mapping dictionary are not unique, i.e., multiple old URIs can be mapped to the same new URI.
         If ``to_delete`` is empty, the returned dictionary will have identical keys and values, i.e., the URIs will not change.
@@ -439,6 +443,7 @@ class FillerFixer(ProvenanceIssueFixer):
     def rename_snapshots(self, mapping):
         """
         Renames snapshots in the triplestore according to the provided mapping.
+
         :param mapping: A dictionary where keys are old snapshot URIs and values are new snapshot URIs.
         :type mapping: dict
         """
@@ -487,7 +492,7 @@ class FillerFixer(ProvenanceIssueFixer):
 
         :param graph_uri: The URI of the named graph containing the snapshots.
         :type graph_uri: str
-        :param snapshots: A list of snapshot URIs sorted by their sequence number.
+        :param snapshots: A list of snapshot URIs.
         :type snapshots: list
         :returns: None
         """
@@ -530,6 +535,8 @@ class FillerFixer(ProvenanceIssueFixer):
             to_fix = self.detect_issue() # keep all the issues in memory
         else:
             if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
+                if os.path.exists(self.issues_log_fp):
+                    logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:
                     self.detect_issue() # writes all issues to self.issues_log_fp
                 else:
@@ -550,8 +557,6 @@ class FillerFixer(ProvenanceIssueFixer):
         else:
             stream = self.issues_log_fp
         
-        # batch_size = 500
-
         for batch_idx, (batch, _) in checkpointed_batch(
             stream, 
             batch_size, 
@@ -572,18 +577,22 @@ class FillerFixer(ProvenanceIssueFixer):
         
         logging.info(f"[{self.__class__.__name__}] Fixing filler snapshots terminated.")
 
-
     
 # (2) DATETIME values correction -> move in daughter class DateTimeFixer
 class DateTimeFixer(ProvenanceIssueFixer):
     """
-    A class to fix issues related to ill-formed datetime values in the OpenCitations Meta graph.
-    This class provides methods to fetch quads with ill-formed datetime values, correct them, and batch fix them in the triplestore.
+    A class to fix issues related to ill-formed datetime values in the OpenCitations Meta provenance dataset.
+
+    The following datetime formats are considered ill-formed or to be normalized:
+    - Datetime values without timezone information (e.g. 2020-04-22T12:00:00).
+    - Datetime values including microseconds (e.g. 2020-04-22T12:00:00.123456Z).
+    - Datetime values with timezone offsets different from UTC or specified in other formats than 'Z' (e.g. 2020-04-22T12:00:00+00:00).
+    - All or some of the above combined (e.g. 2020-04-22T12:00:00.123456+00:00).
     """
     def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None):
         super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
     
-    def detect_issue(self, limit=10000) -> List[Tuple[str]]:
+    def detect_issue(self, limit=10000) -> Union[None, List[Tuple[str]]]:
         """
         Fetch all quads where the datetime object value is not syntactically correct or complete, including cases where
         the timezone is not specified (making the datetime impossible to compare with other offset-aware datetimes) 
@@ -592,7 +601,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
         :param limit: The number of results to fetch per page.
         :type limit: int
         :returns: List of tuples (graph URI, subject, predicate, datetime value).
-        :rtype: List[Tuple[str, str, str, str]]
+        :rtype: Union[None, List[Tuple[str]]]
         """
         result = []
         counter = 0
@@ -655,6 +664,11 @@ class DateTimeFixer(ProvenanceIssueFixer):
         return result if not self.issues_log_fp else None  # if issues_log_fp is provided, the results are logged to the file and not returned
 
     def detect_issue_from_files(self, modified_graphs:dict) -> List[Tuple[str]]:
+        """
+        Detect ill-formed datetime values by reading local JSON-LD dump files instead of querying the SPARQL endpoint directly.
+
+        :param modified_graphs: A dictionary where keys are graph URIs and values are the modified graph objects
+        """
 
         result = []
         counter = 0
@@ -775,6 +789,8 @@ class DateTimeFixer(ProvenanceIssueFixer):
             to_fix = self.detect_issue() # keep all the issues in memory
         else:
             if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
+                if os.path.exists(self.issues_log_fp):
+                    logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:
                     self.detect_issue() # writes all issues to self.issues_log_fp
                 else:
@@ -792,7 +808,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
 # (3) correct creation snapshots without primary source -> move to daughter class MissingPrimSourceFixer
 class MissingPrimSourceFixer(ProvenanceIssueFixer):
     """
-    A class to fix issues related to creation snapshots that do not have a primary source in the OpenCitations Meta graph.
+    A class to fix issues related to creation snapshots that do not have a primary source in the OpenCitations Meta provenance dataset.
     """
     def __init__(self, endpoint: str, meta_dumps_pub_dates: List[Tuple[str, str]], dump_dir:str=None, issues_log_dir:Union[str, None]=None):
         """
@@ -971,6 +987,8 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
             to_fix = self.detect_issue()
         else:
             if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
+                if os.path.exists(self.issues_log_fp):
+                    logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:
                     self.detect_issue() # writes all issues to self.issues_log_fp
                 else:
@@ -989,7 +1007,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
 # TODO: (4) Correct snapshots with multiple objects for prov:wasAttributedTo -> move in daughter class MultiPAFixer
 class MultiPAFixer(ProvenanceIssueFixer):
     """
-    A class to fix issues related to snapshots that have multiple objects for the ``prov:wasAttributedTo`` property in the OpenCitations Meta graph.
+    A class to fix issues related to snapshots that have multiple objects for the ``prov:wasAttributedTo`` property in the OpenCitations Meta provenance dataset.
     """
     def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None):
         super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
@@ -1042,7 +1060,6 @@ class MultiPAFixer(ProvenanceIssueFixer):
                 for b in current_bindings:
                     g = b['g']['value']
                     s = b['s']['value']
-                    # result.append((g, s))
                     counter +=1
                     out_row = (g, s)
 
@@ -1110,7 +1127,8 @@ class MultiPAFixer(ProvenanceIssueFixer):
 
     def batch_fix_extra_pa(self, multi_pa_snapshots:Union[str, List[Tuple[str]]], batch_size=200, checkpoint=None):
         """
-        Delete triples where the value of ``prov:wasAttributedTo`` is <https://w3id.org/oc/meta/prov/pa/1> if there is at least another processing agent for the same snapshot subject.
+        Delete triples where the value of ``prov:wasAttributedTo`` is <https://w3id.org/oc/meta/prov/pa/1> if there 
+            is at least another processing agent for the same snapshot subject.
 
         :param multi_pa_snapshots: A list of tuples where each tuple contains a graph URI and a snapshot URI.
         :type multi_pa_snapshots: Union[str, List[Tuple[str]]]
@@ -1164,6 +1182,8 @@ class MultiPAFixer(ProvenanceIssueFixer):
             to_fix = self.detect_issue()
         else:
             if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
+                if os.path.exists(self.issues_log_fp):
+                    logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:
                     self.detect_issue() # writes all issues to self.issues_log_fp
                 else:
@@ -1182,7 +1202,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
 # (5) Correct graphs where at least one snapshots has too many objects for specific properties -> move to daughter class MultiObjectFixer
 class MultiObjectFixer(ProvenanceIssueFixer):
     """
-    A class to fix issues related to graphs where at least one snapshot has too many objects for specific properties in the OpenCitations Meta graph.
+    A class to fix issues related to graphs where at least one snapshot has too many objects for specific properties in the OpenCitations Meta provenance dataset.
     """
     def __init__(self, endpoint:str, meta_dumps_pub_dates: List[Tuple[str, str]], dump_dir:str=None, issues_log_dir:Union[str, None]=None):
         """
@@ -1335,46 +1355,9 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         creation snapshot, which will be the only one left for that graph.
 
         :param graphs: A list of tuples (graph URI, generation time) for graphs that have too many objects for properties that only admit one.
-        :type graphs: list
+        :type graphs: Union[str, list]
         :returns: None
         """
-
-        # template = Template("""
-        # PREFIX prov: <http://www.w3.org/ns/prov#>
-        # PREFIX dcterms: <http://purl.org/dc/terms/>
-        # PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-        # PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-
-        # #WITH GRAPH <$graph> # WITH clause seems not to be supported in rdflib
-        # DELETE {
-        #   GRAPH <$graph> {
-        #     ?s ?p ?o
-        #   }
-        # }
-        # INSERT {
-        #   GRAPH <$graph> {
-        #     <$creation_snapshot> prov:hadPrimarySource <$primary_source> ;
-        #       prov:wasAttributedTo <$processing_agent> ;
-        #       prov:specializationOf <$specialization_of> ;
-        #       dcterms:description "$description" ;
-        #       rdf:type prov:Entity ;
-        #       prov:generatedAtTime ?genTime .
-        #   }
-        # }
-        # WHERE {
-        #   {
-        #     SELECT ?genTime WHERE {
-        #       GRAPH <$graph> {
-        #         ?_s prov:generatedAtTime ?genTime .
-        #         FILTER(strends(str(?_s), "/se/1"))
-        #       }
-        #     }
-        #   }
-        #   GRAPH <$graph> {
-        #     ?s ?p ?o .
-        #   }
-        # }
-        # """)
 
         template = Template("""
         PREFIX prov: <http://www.w3.org/ns/prov#>
@@ -1396,7 +1379,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         """)
         logging.debug("Resetting graphs with too many objects by creating a new single creation snapshot...")
 
-        # batch_size = 500  # updates are executed with individual queries anyway
+        # batch_size = 200  # updates are executed with individual queries anyway
 
         for batch_idx, (batch, line_num) in checkpointed_batch(
             graphs, 
@@ -1422,7 +1405,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
                         processing_agent = processing_agent,
                         specialization_of = referent, 
                         description = desc,
-                        gen_time = gen_time  # double check
+                        gen_time = gen_time
                     )
 
                     self._update(query)
@@ -1441,6 +1424,8 @@ class MultiObjectFixer(ProvenanceIssueFixer):
             to_fix = self.detect_issue()
         else:
             if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
+                if os.path.exists(self.issues_log_fp):
+                    logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:
                     self.detect_issue() # writes all issues to self.issues_log_fp
                 else:

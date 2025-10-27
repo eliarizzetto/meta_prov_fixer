@@ -116,6 +116,6 @@ if __name__ == "__main__":
 
 
 ## Detect issues from RDF files and fix on DB:
-## poetry run python meta_prov_fixer/main.py -e http://localhost:8890/sparql/ -m meta_dumps.json -i "/home/elia/Lavoro/meta_prov_fixer/data_to_fix/oct16/" -d "/media/elia/T7/br_v8_sample_0610/br/0610/"
+## poetry run python meta_prov_fixer/main.py -e http://localhost:8890/sparql/ -m meta_dumps.json -i "./data_to_fix" -d "/meta/dump/directory/"
 
 
