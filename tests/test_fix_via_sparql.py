@@ -528,8 +528,8 @@ class TestFixProcess(BaseTestCase):
         fix_process_reading_from_files(
             self.sparql_endpoint,
             self.fake_dump_dir,
-            'tests/data/fix_process_log',
             self.meta_dumps_pub_dates,
+            'tests/data/fix_process_log',
             dry_run=self.dry_run,
         )
 

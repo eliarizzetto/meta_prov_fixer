@@ -203,7 +203,6 @@ class FillerFixer(ProvenanceIssueFixer):
     """
     def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None):
         super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
-        self.rename_mapping = {}
 
     def detect_issue(self, limit=10000) -> List[Tuple[str, Dict[str, Set[str]]]]:
         """
@@ -368,7 +367,7 @@ class FillerFixer(ProvenanceIssueFixer):
                 query = template.substitute(dels=dels_str)
 
                 self._update(query)
-                logging.info(f"[{self.__class__.__name__}] Batch {batch_idx} (deletion) completed.")
+                logging.debug(f"[{self.__class__.__name__}] Batch {batch_idx} (deletion) completed.")
             except Exception as e:
                 logging.error(f"Error while deleting filler snapshots in Batch {batch_idx}, lines {line_num-batch_size} to {line_num}: {e}")
                 print(f"Error while deleting filler snapshots in Batch {batch_idx}, lines {line_num-batch_size} to {line_num}: {e}")
@@ -761,7 +760,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
                 query = template.substitute(to_delete=to_delete_str, to_insert=to_insert_str)
 
                 self._update(query)
-                logging.info(f"[{self.__class__.__name__}] Batch {batch_idx} completed.")
+                logging.debug(f"[{self.__class__.__name__}] Batch {batch_idx} completed.")
 
             except Exception as e:
                 logging.error(f"Error while fixing datetime values in Batch {batch_idx} for quads {line_num-batch_size} to {line_num}: {e}")
@@ -957,7 +956,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
                 query = template.substitute(quads=quads_str)
 
                 self._update(query)
-                logging.info(f"[{self.__class__.__name__}] Batch {batch_idx} completed.")
+                logging.debug(f"[{self.__class__.__name__}] Batch {batch_idx} completed.")
             except Exception as e:
                 logging.error(f"Error while fixing multiple primary source in Batch {batch_idx} for snapshots {line_num-batch_size} to {line_num}: {e}")
                 print(f"Error while fixing multiple primary source in Batch {batch_idx} for snapshots {line_num-batch_size} to {line_num}: {e}")
@@ -1151,7 +1150,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
                 query = template.substitute(quads_to_delete=to_delete_str, quads_to_insert=to_insert_str)
 
                 self._update(query)
-                logging.info(f"[{self.__class__.__name__}] Batch {batch_idx} completed.")
+                logging.debug(f"[{self.__class__.__name__}] Batch {batch_idx} completed.")
             except Exception as e:
                 logging.error(f"Error while fixing multiple processing agents in Batch {batch_idx} for snapshots {line_num-batch_size} to {line_num}: {e}")
                 print(f"Error while fixing multiple processing agents in Batch {batch_idx} for snapshots {line_num-batch_size} to {line_num}: {e}")
@@ -1427,7 +1426,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
                     )
 
                     self._update(query)
-                logging.info(f"[{self.__class__.__name__}] Batch {batch_idx} completed.")
+                logging.debug(f"[{self.__class__.__name__}] Batch {batch_idx} completed.")
             except Exception as e:
                 logging.error(f"Error while resetting graphs in Batch {batch_idx} for graphs{line_num-batch_size} to {line_num}: {e}")
                 print(f"Error while resetting graphs in Batch {batch_idx} for graphs{line_num-batch_size} to {line_num}: {e}")
@@ -1467,6 +1466,12 @@ def fix_process(
     """
     Function wrapping all the single fix operations into a single process,
     with strictly ordered steps, checkpointing, and timing.
+
+    :param endpoint: SPARQL endpoint URL
+    :param meta_dumps_pub_dates: List of (date, url) tuples for meta dumps.
+    :param issues_log_dir: Directory in which to write files storing detected issues.
+    :param dry_run: If True, only print what would be done, don't actually do it.
+    :param checkpoint: Path to checkpoint file. If None, no checkpointing is performed.
     """
 
     ckpt_mngr = CheckpointManager(checkpoint) # checkpoint file will be deleted if program terminates succesfully
@@ -1483,25 +1488,30 @@ def fix_process(
     timer.start()
 
     for i, fixer in enumerate(fixers):
-        logging.info(f"Created instance of {fixer.__class__.__qualname__}.")
+        try:
+            logging.info(f"Created instance of {fixer.__class__.__qualname__}.")
 
-        # --- resume logic: skip completed fixer ---
-        if ckpt_mngr:
-            state = ckpt_mngr.load()
-            if (
-                state.get("fixer") == fixer.__class__.__name__
-                and state.get("phase") == "done"
-            ):
-                logging.info(f"Skipping {fixer.__class__.__name__} (already completed).")
-                continue
+            # --- resume logic: skip completed fixer ---
+            if ckpt_mngr:
+                state = ckpt_mngr.load()
+                if (
+                    state.get("fixer") == fixer.__class__.__name__
+                    and state.get("phase") == "done"
+                ):
+                    logging.info(f"Skipping {fixer.__class__.__name__} (already completed).")
+                    continue
 
-        # --- run fixer ---
-        timer.start_phase()
-        if not dry_run:
-            fixer.fix_issue(checkpoint=ckpt_mngr)
-        else:
-            logging.debug(f"[fix_process]: Would run {fixer.__class__.__name__}")
-        phase_time = timer.end_phase()
+            # --- run fixer ---
+            timer.start_phase()
+            if not dry_run:
+                fixer.fix_issue(checkpoint=ckpt_mngr)
+            else:
+                logging.debug(f"[fix_process]: Would run {fixer.__class__.__name__}")
+            phase_time = timer.end_phase()
+
+        finally:
+            if ckpt_mngr:
+                logging.info(ckpt_mngr.load())
 
         # --- log progress ---
         elapsed, remaining = timer.eta(i)
@@ -1526,14 +1536,21 @@ def fix_process(
 def fix_process_reading_from_files(
     endpoint: str,
     dump_dir:str,
-    issues_log_dir: str,
     meta_dumps_pub_dates: List[Tuple[str, str]],
+    issues_log_dir: str,
     dry_run: bool = False,
     checkpoint='checkpoint.json'
 ):
     """
     Function wrapping all the single fix operations into a single process,
-    with strictly ordered steps, checkpointing, and timing.
+    with strictly ordered steps, checkpointing, and timing. Reads from RDF dump files for detecting issues.
+
+    :param endpoint: SPARQL endpoint URL
+    :param dump_dir: Directory containing RDF dump files to read from.
+    :param meta_dumps_pub_dates: List of (date, url) tuples for meta dumps.
+    :param issues_log_dir: Directory in which to write files storing detected issues.
+    :param dry_run: If True, only print what would be done, don't actually do it.
+    :param checkpoint: Path to checkpoint file. If None, no checkpointing is performed.
     """
 
     ckpt_mngr = CheckpointManager(checkpoint) # checkpoint file will be deleted if program terminates succesfully
@@ -1552,33 +1569,38 @@ def fix_process_reading_from_files(
     modified_graphs_mapping = dict()  # to keep track of graphs modified by FillerFixer
 
     for i, fixer in enumerate(fixers):
-        logging.info(f"Created instance of {fixer.__class__.__qualname__}.")
+        try:
+            logging.info(f"Created instance of {fixer.__class__.__qualname__}.")
 
-        # --- resume logic: skip completed fixer ---
-        if ckpt_mngr:
-            state = ckpt_mngr.load()
-            if (
-                state.get("fixer") == fixer.__class__.__name__
-                and state.get("phase") == "done"
-            ):
-                logging.info(f"Skipping {fixer.__class__.__name__} (already completed).")
-                continue
+            # --- resume logic: skip completed fixer ---
+            if ckpt_mngr:
+                state = ckpt_mngr.load()
+                if (
+                    state.get("fixer") == fixer.__class__.__name__
+                    and state.get("phase") == "done"
+                ):
+                    logging.info(f"Skipping {fixer.__class__.__name__} (already completed).")
+                    continue
 
-        # --- run fixer ---
-        timer.start_phase()
-        if not dry_run:
-            if i == 0: # i.e. FillerFixer
-                fixer.fix_issue(checkpoint=ckpt_mngr)
-                mod_graphs_uris = load_modified_graphs_uris(fixer.issues_log_fp)
-                logging.info(f"Simulating FillerFixer changes for {len(mod_graphs_uris)} graphs...")
-                modified_graphs_mapping.update({g['@id']: simulate_ff_changes(g) for g in read_rdf_dump(dump_dir) if g['@id'] in mod_graphs_uris})
+            # --- run fixer ---
+            timer.start_phase()
+            if not dry_run:
+                if i == 0: # i.e. FillerFixer
+                    fixer.fix_issue(checkpoint=ckpt_mngr)
+                    mod_graphs_uris = load_modified_graphs_uris(fixer.issues_log_fp)
+                    logging.info(f"Simulating FillerFixer changes for {len(mod_graphs_uris)} graphs...")
+                    modified_graphs_mapping.update({g['@id']: simulate_ff_changes(g) for g in read_rdf_dump(dump_dir) if g['@id'] in mod_graphs_uris})
 
-            else: # i.e. all other fixers
-                fixer.fix_issue(checkpoint=ckpt_mngr, modified_graphs=modified_graphs_mapping)
-            
-        else:
-            logging.debug(f"[fix_process]: Would run {fixer.__class__.__name__}")
-        phase_time = timer.end_phase()
+                else: # i.e. all other fixers
+                    fixer.fix_issue(checkpoint=ckpt_mngr, modified_graphs=modified_graphs_mapping)
+                
+            else:
+                logging.debug(f"[fix_process]: Would run {fixer.__class__.__name__}")
+            phase_time = timer.end_phase()
+        
+        finally:
+            if ckpt_mngr:
+                logging.info(ckpt_mngr.load())
 
         # --- log progress ---
         elapsed, remaining = timer.eta(i)

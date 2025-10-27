@@ -72,7 +72,7 @@ def main():
 
     # --- Logging setup ---
     logging.basicConfig(
-        level=logging.DEBUG,  # or logging.INFO
+        level=logging.INFO,  # or logging.INFO
         format="%(asctime)s - %(levelname)s - %(message)s",
         filename=args.log_fp
     )
