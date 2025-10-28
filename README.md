@@ -36,7 +36,7 @@ The main CLI entrypoint is `meta_prov_fixer/main.py`. It accepts the following o
 - `-e, --endpoint` (required) — SPARQL endpoint URL to update.
 - `-m, --meta-dumps` (required) — Path to a JSON file containing a list of published meta-dump records; this must be a JSON list of 2-item arrays: `["YYYY-MM-DD", "<dump-doi-or-url>"]`.
 - `-i, --issues-log-dir` — Directory where detected issues (JSON Lines) will be written. Required when `--dump-dir` is used.
-- `-d, --dump-dir` — If provided, detection will read RDF dump files from this directory instead of querying the SPARQL endpoint.
+- `-d, --dump-dir` — If provided, detection will read RDF dump provenance files from this directory instead of querying the SPARQL endpoint.
 - `-c, --checkpoint` — Path to a checkpoint file (default: `checkpoint.json`).
 - `--dry-run` — Run pipeline in dry-run mode (no updates applied; useful for debugging).
 - `-l, --log-fp` — File path for pipeline logs. Defaults to `provenance_fix_<today>.log`.
@@ -49,7 +49,7 @@ Detect issues from the SPARQL endpoint and apply fixes (only applicable with sma
 python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json
 ```
 
-Detect issues from the SPARQL endpoint, save them to disk, and apply fixes:
+Detect issues from the SPARQL endpoint, save them to disk, and apply fixes (might incur in timeout errors if the dataset is very large):
 
 ```shell
 python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json -i ./data_to_fix
