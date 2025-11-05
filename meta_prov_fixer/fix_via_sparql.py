@@ -371,7 +371,7 @@ class FillerFixer(ProvenanceIssueFixer):
                 query = template.substitute(dels=dels_str)
 
                 self._update(query)
-                logging.debug(f"[{self.__class__.__name__}] Batch {batch_idx} (deletion) completed.")
+                logging.info(f"[{self.__class__.__name__}] Batch {batch_idx} (deletion) completed.")
             except Exception as e:
                 logging.error(f"Error while deleting filler snapshots in Batch {batch_idx}, lines {line_num-batch_size} to {line_num}: {e}")
                 print(f"Error while deleting filler snapshots in Batch {batch_idx}, lines {line_num-batch_size} to {line_num}: {e}")
@@ -691,16 +691,19 @@ class DateTimeFixer(ProvenanceIssueFixer):
                     graph_obj = modified_graphs[graph_obj['@id']] # use the graph already modified by FillerFixer (simulation)
 
                 for se_obj in graph_obj['@graph']:
+                    genTime_vals = []
+                    invalTime_vals = []
                     if se_obj.get(gentime_prop):
-                        genTime_val = [d['@value'] for d in se_obj[gentime_prop]]
+                        genTime_vals = [d['@value'] for d in se_obj[gentime_prop]]
                     if se_obj.get(invaltime_prop):
-                        invalTime_val = [d['@value'] for d in se_obj[invaltime_prop]]
+                        invalTime_vals = [d['@value'] for d in se_obj[invaltime_prop]]
+
 
                     pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:(?:\+00:00)|Z)$"
 
-                    for prop, val in [(gentime_prop, genTime_val), (invaltime_prop, invalTime_val)]:
-                        if val:
-                            for dt in val:
+                    for prop, values in [(gentime_prop, genTime_vals), (invaltime_prop, invalTime_vals)]:
+                        if values:
+                            for dt in values:
                                 if not re.match(pattern, dt):
                                     g = graph_obj['@id']
                                     s = se_obj['@id']
@@ -1552,6 +1555,7 @@ def fix_process_reading_from_files(
     timer.start()
 
     modified_graphs_mapping = dict()  # to keep track of graphs modified by FillerFixer
+    TMP_FILE_SIMULATED_GRAPHS = os.path.join(issues_log_dir if issues_log_dir else '.', 'temp_simulated_graphs.json') # store to file for checkpointing
 
     for i, fixer in enumerate(fixers):
         try:
@@ -1575,8 +1579,15 @@ def fix_process_reading_from_files(
                     mod_graphs_uris = load_modified_graphs_uris(fixer.issues_log_fp)
                     logging.info(f"Simulating FillerFixer changes for {len(mod_graphs_uris)} graphs...")
                     modified_graphs_mapping.update({g['@id']: simulate_ff_changes(g) for g in read_rdf_dump(dump_dir) if g['@id'] in mod_graphs_uris})
+                    
+                    # save simulated graphs to temp file
+                    with open(TMP_FILE_SIMULATED_GRAPHS, 'w', encoding='utf-8') as tf:
+                        json.dump(modified_graphs_mapping, tf)
+
 
                 else: # i.e. all other fixers
+                    with open(TMP_FILE_SIMULATED_GRAPHS, 'r', encoding='utf-8') as tf:
+                        modified_graphs_mapping = json.load(tf)
                     fixer.fix_issue(checkpoint=ckpt_mngr, modified_graphs=modified_graphs_mapping)
                 
             else:
@@ -1585,7 +1596,7 @@ def fix_process_reading_from_files(
         
         finally:
             if ckpt_mngr:
-                logging.info(ckpt_mngr.load())
+                logging.info(f"Latest checkpoint state: {ckpt_mngr.load()}")
 
         # --- log progress ---
         elapsed, remaining = timer.eta(i)
@@ -1599,8 +1610,11 @@ def fix_process_reading_from_files(
             ckpt_mngr.save(fixer.__class__.__name__, "done", -1)
             logging.info(f"{fixer.__class__.__name__} completed.")
 
-    # clear checkpoint only when the whole pipeline is done
+    # clear checkpoint and remove temp file for simulated graphs only when the whole pipeline is done
     logging.info("All fixing operations terminated.")
     if ckpt_mngr:
         ckpt_mngr.clear()
+        if os.path.exists(TMP_FILE_SIMULATED_GRAPHS):
+            os.remove(TMP_FILE_SIMULATED_GRAPHS) # remove temp file storing simulated graphs
+
     return None
