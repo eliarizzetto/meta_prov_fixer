@@ -735,8 +735,8 @@ class DateTimeFixer(ProvenanceIssueFixer):
         Note that ``xsd:dateTime`` is always made explicit in newly inserted values.
 
         .. note::
-           If a snapshot has multiple objects for ``prov:invalidatedAtTime`` or ``prov:generatedAtTime`` (though this should never 
-           be the case), they all get deleted and replaced with a single, correct, value.
+           If a snapshot has multiple objects for ``prov:invalidatedAtTime`` or ``prov:generatedAtTime`` (though the latter should never 
+           be the case), they all get replaced with their respective normalised value.
 
         :param quads: List of quads to fix (in memory) or a path to a file containing quads in JSON Lines format.
         :type quads: Union[list, str]
