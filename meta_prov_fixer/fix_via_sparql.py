@@ -12,6 +12,7 @@ import re
 from rdflib.plugins.sparql.processor import SPARQLResult
 from rdflib import Dataset
 import json
+from urllib.error import HTTPError, URLError
 
 # # OC Meta published RDF dumps publication dates and DOIs at the time of writing this code (2025-07-01).
 # meta_dumps_pub_dates = [
@@ -121,35 +122,74 @@ class ProvenanceIssueFixer:
         if self.issues_log_fp:
             os.makedirs(os.path.dirname(self.issues_log_fp), exist_ok=True)
 
-    def _query(self, query: str, retries: int = 3, delay: float = 2.0) -> Union[dict, None]:
+    def _query(self, query: str, retries: int = 3, delay: float = 5.0) -> Union[dict, None]:
+
+        time.sleep(0.1)  # slight delay to avoid overwhelming the endpoint
         for attempt in range(retries):
             try:
                 self.sparql.setQuery(query)
                 return self.sparql.query().convert()
-            except Exception as e:
-                logging.warning(f"Attempt {attempt + 1} failed: {e}")
-                if attempt < retries - 1:
-                    time.sleep(delay)
+            
+            except HTTPError as e:
+                # Virtuoso is up, but rejected the query
+                if e.code == 503:
+                    logging.warning(f"[Attempt {attempt}] HTTP error 503: {e.reason}. Retrying...")
                 else:
-                    logging.error("Max retries reached. Query failed.")
-                    return None
-            finally:
-                time.sleep(0.1)  # slight delay to avoid overwhelming the endpoint
+                    logging.warning(f"[Attempt {attempt}] HTTP error {e.code}: {e.reason}. Retrying...")
 
-    def _update(self, update_query: str, retries: int = 3, delay: float = 2.0) -> None:
+            except URLError as e:
+                # Network-level errors (connection refused, dropped, etc.)
+                if "connection refused" in str(e.reason).lower():
+                    logging.error(f"[Attempt {attempt}] Virtuoso appears DOWN (connection refused). {e.reason}. Killing process.")
+                    raise e  # kill whole process
+                elif "closed connection" in str(e.reason).lower():
+                    logging.warning(f"[Attempt {attempt}] Connection closed mid-request (?). Retrying...")
+                else:
+                    logging.warning(f"[Attempt {attempt}] URL error: {e.reason}")
+
+            except Exception as e:  # catch-all for other exceptions
+                logging.warning(f"Attempt {attempt + 1} failed: {e}")
+
+            if attempt < retries - 1:
+                time.sleep(delay**(attempt+1)) # exponential backoff
+            else:
+                logging.error("Max retries reached. Query failed.")
+                return None
+
+    def _update(self, update_query: str, retries: int = 3, delay: float = 5.0) -> None:
+        time.sleep(0.1)  # slight delay to avoid overwhelming the endpoint
         for attempt in range(retries):
             try:
                 self.sparql.setQuery(update_query)
                 self.sparql.query()
                 return
-            except Exception as e:
-                logging.warning(f"Attempt {attempt + 1} failed: {e}")
-                if attempt < retries - 1:
-                    time.sleep(delay)
+
+            except HTTPError as e:
+                # Virtuoso is up, but rejected the query
+                if e.code == 503:
+                    logging.warning(f"[Attempt {attempt}] HTTP error 503: {e.reason}. Retrying...")
                 else:
-                    logging.error("Max retries reached. Update failed.")
-                    with open(self.failed_queries_fp, "a") as f:
-                        f.write(update_query.replace("\n", "\\n") + "\n")
+                    logging.warning(f"[Attempt {attempt}] HTTP error {e.code}: {e.reason}. Retrying...")
+
+            except URLError as e:
+                # Network-level errors (connection refused, dropped, etc.)
+                if "connection refused" in str(e.reason).lower():
+                    logging.error(f"[Attempt {attempt}] Virtuoso appears DOWN (connection refused). {e.reason}. Killing process.")
+                    raise e  # kill whole process
+                elif "closed connection" in str(e.reason).lower():
+                    logging.warning(f"[Attempt {attempt}] Connection closed mid-request (?). Retrying...")
+                else:
+                    logging.warning(f"[Attempt {attempt}] URL error: {e.reason}")
+                    
+            except Exception as e: # catch-all for other exceptions
+                logging.warning(f"Attempt {attempt + 1} failed: {e}")
+
+            if attempt < retries - 1:
+                time.sleep(delay**(attempt+1)) # exponential backoff
+            else:
+                logging.error("Max retries reached. Update failed.")
+                with open(self.failed_queries_fp, "a") as f:
+                    f.write(update_query.replace("\n", "\\n") + "\n")
 
     def _paginate_query(self, query_template: str, limit: int = 10000, sleep: float = 0.5) -> Generator[List[Dict[str, Any]], None, None]:
         """
