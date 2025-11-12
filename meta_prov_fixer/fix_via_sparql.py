@@ -1511,6 +1511,7 @@ def fix_process(
         MultiPAFixer(endpoint, issues_log_dir=issues_log_dir),
         MultiObjectFixer(endpoint, meta_dumps_pub_dates, issues_log_dir=issues_log_dir),
     )
+    steps = tuple(fixer.__class__.__name__ for fixer in fixers)
 
     timer = TimedProcess(total_phases=len(fixers))
     timer.start()
@@ -1525,6 +1526,8 @@ def fix_process(
                 if (
                     state.get("fixer") == fixer.__class__.__name__
                     and state.get("phase") == "done"
+                ) or (
+                    steps.index(state.get("fixer", steps[0])) > i  # skip if a later fixer was completed
                 ):
                     logging.info(f"Skipping {fixer.__class__.__name__} (already completed).")
                     continue
@@ -1590,7 +1593,7 @@ def fix_process_reading_from_files(
         MultiPAFixer(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir),
         MultiObjectFixer(endpoint, meta_dumps_pub_dates, dump_dir=dump_dir, issues_log_dir=issues_log_dir),
     )
-
+    steps = tuple(fixer.__class__.__name__ for fixer in fixers)
     timer = TimedProcess(total_phases=len(fixers))
     timer.start()
 
@@ -1607,6 +1610,8 @@ def fix_process_reading_from_files(
                 if (
                     state.get("fixer") == fixer.__class__.__name__
                     and state.get("phase") == "done"
+                ) or (
+                    steps.index(state.get("fixer", steps[0])) > i  # skip if a later fixer was completed
                 ):
                     logging.info(f"Skipping {fixer.__class__.__name__} (already completed).")
                     continue
