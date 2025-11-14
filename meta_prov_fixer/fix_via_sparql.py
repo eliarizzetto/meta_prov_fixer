@@ -93,7 +93,7 @@ def simulate_ff_changes(local_named_graph:dict) -> dict:
 
 
 class ProvenanceIssueFixer:
-    def __init__(self, endpoint: str, dump_dir:Union[str, None]=None, issues_log_dir:Union[str, None]=None, checkpoint='checkpoint.json'):
+    def __init__(self, endpoint: str, dump_dir:Union[str, None]=None, issues_log_dir:Union[str, None]=None, checkpoint_fp='checkpoint.json'):
         """
         Base class for fixing provenance issues via SPARQL queries.
         Initializes the SPARQL endpoint and sets up the query method.
@@ -103,7 +103,7 @@ class ProvenanceIssueFixer:
         :param dump_dir: Path to the directory storing the JSON-LD dump files for provenance. 
             If provided, the fixer will read from these files in the error detection phase(instead of querying the SPARQL endpoint directly) (default: None).
         :param issues_log_dir: If provided, the path to the directory where the data involved in a query-detected issue will be logged. If None, data is kept in memory.
-        :param checkpoint: Path to the checkpoint file for resuming interrupted processes (default: 'checkpoint.json').
+        :param checkpoint_fp: Path to the checkpoint file for resuming interrupted processes (default: 'checkpoint.json').
         """
 
         self.endpoint = endpoint
@@ -111,7 +111,7 @@ class ProvenanceIssueFixer:
         self.dump_dir = dump_dir or None
         self.sparql.setReturnFormat(JSON)
         self.sparql.setMethod(POST)
-        self.checkpoint_mngr = CheckpointManager(checkpoint)
+        self.checkpoint_mngr = CheckpointManager(checkpoint_fp)
         self.failed_queries_fp = f"prov_fix_failed_queries_{datetime.today().strftime('%Y-%m-%d')}.txt"
         
         if issues_log_dir:
@@ -238,8 +238,8 @@ class FillerFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to filler snapshots in the OpenCitations Meta provenance dataset.
     """
-    def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None):
-        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
+    def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None, checkpoint_fp='checkpoint.json'):
+        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp)
 
     def detect_issue(self, limit=10000) -> List[Tuple[str, Dict[str, Set[str]]]]:
         """
@@ -293,7 +293,7 @@ class FillerFixer(ProvenanceIssueFixer):
             logging.info(paradata)
         try:
             # Pagination loop
-            logging.debug("Fetching filler snapshots (to be deleted) with pagination...")
+            logging.info(f"[{self.__class__.__name__}] Fetching filler snapshots (to be deleted) with pagination...")
             for current_bindings in self._paginate_query(template, limit):
                 # group query results
                 for b in current_bindings:
@@ -335,7 +335,7 @@ class FillerFixer(ProvenanceIssueFixer):
             logging.info(paradata)
 
         try:
-            logging.debug("Fetching filler snapshots (to be deleted) from RDF files...")
+            logging.info(f"[{self.__class__.__name__}] Fetching filler snapshots (to be deleted) from RDF files...")
             for graph_obj in read_rdf_dump(self.dump_dir):
                 if len(graph_obj['@graph']) <= 1:
                     continue
@@ -377,7 +377,7 @@ class FillerFixer(ProvenanceIssueFixer):
         return list(dict(grouped_result).items()) if not self.issues_log_fp else None
             
 
-    def batch_delete_filler_snapshots(self, deletions: Union[str, List[Tuple[str, Dict[str, Set[str]]]]], batch_size=200, checkpoint=None) -> None:
+    def batch_delete_filler_snapshots(self, deletions: Union[str, List[Tuple[str, Dict[str, Set[str]]]]], batch_size=200) -> None:
         """
         Deletes snapshots from the triplestore based on the provided deletions list.
 
@@ -391,14 +391,16 @@ class FillerFixer(ProvenanceIssueFixer):
             $dels
         """)
 
-        logging.debug("Deleting filler snapshots in batches...")
+        logging.info(f"[{self.__class__.__name__}] Deleting filler snapshots in batches...")
+
+        ckpt_mg = self.checkpoint_mngr if self.issues_log_fp else None
 
         for batch_idx, (batch, line_num) in checkpointed_batch(
             deletions, 
             batch_size, 
             fixer_name=self.__class__.__name__, 
             phase="batch_delete",
-            checkpoint=checkpoint
+            ckpnt_mngr=ckpt_mg
         ):
             try:
                 dels = []
@@ -568,29 +570,31 @@ class FillerFixer(ProvenanceIssueFixer):
 
             self._update(query)
 
-    def fix_issue(self, batch_size=200, checkpoint=None):
+    def fix_issue(self, batch_size=200):
+
+        ckpt_mg = self.checkpoint_mngr if self.issues_log_fp else None
 
         # step 0: detect filler snapshots
-        if not self.issues_log_fp:
-            to_fix = self.detect_issue() # keep all the issues in memory
-        else:
-            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint_mngr):
+        if not self.issues_log_fp: # keep all the issues in memory
+            to_fix = self.detect_issue()
+        else:  # writes all issues to self.issues_log_fp
+            if not detection_completed(self.__class__.__name__, ckpt_mg):
                 if os.path.exists(self.issues_log_fp):
                     logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
-                if not self.dump_dir:
-                    self.detect_issue() # writes all issues to self.issues_log_fp
-                else:
+                if not self.dump_dir:  # read from the SPARQL endpoint
+                    self.detect_issue() 
+                else:  # read from local RDF dump files
                     self.detect_issue_from_files()
             else:
                 logging.warning(f"[{self.__class__.__name__}] Issues already detected: reading from file {self.issues_log_fp}")
 
         # step 1: delete filler snapshots in the role of subjects
         if not self.issues_log_fp:
-            self.batch_delete_filler_snapshots(to_fix, checkpoint=checkpoint)
+            self.batch_delete_filler_snapshots(to_fix)
         else:
-            self.batch_delete_filler_snapshots(self.issues_log_fp, checkpoint=checkpoint)
+            self.batch_delete_filler_snapshots(self.issues_log_fp)
 
-        logging.debug(f"Updating the graphs that had filler snapshots and the related resources in other graphs...")
+        logging.info(f"Updating the graphs that had filler snapshots and the related resources in other graphs...")
 
         if not self.issues_log_fp:
             stream = to_fix
@@ -602,7 +606,7 @@ class FillerFixer(ProvenanceIssueFixer):
             batch_size, 
             fixer_name=self.__class__.__name__, 
             phase="rename_and_adapt_datetime_sequence", 
-            checkpoint=checkpoint
+            ckpnt_mngr=ckpt_mg
         ):
             # step 2: delete filler snapshots in the role of objects and rename rename remaining snapshots
             for g, _dict in batch:
@@ -615,7 +619,7 @@ class FillerFixer(ProvenanceIssueFixer):
             
             logging.info(f"[{self.__class__.__name__}] Batch {batch_idx} (renaming snapshots + adapting time sequence) completed.")
         
-        logging.info(f"[{self.__class__.__name__}] Fixing filler snapshots terminated.")
+        logging.info(f"[{self.__class__.__name__}] Fixing graphs with filler snapshots terminated.")
 
     
 # (2) DATETIME values correction -> move in daughter class DateTimeFixer
@@ -629,8 +633,8 @@ class DateTimeFixer(ProvenanceIssueFixer):
     - Datetime values with timezone offsets different from UTC or specified in other formats than 'Z' (e.g. 2020-04-22T12:00:00+00:00).
     - All or some of the above combined (e.g. 2020-04-22T12:00:00.123456+00:00).
     """
-    def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None):
-        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
+    def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None, checkpoint_fp='checkpoint.json'):
+        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp)
     
     def detect_issue(self, limit=10000) -> Union[None, List[Tuple[str]]]:
         """
@@ -674,7 +678,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
         
         try:
             # Pagination loop
-            logging.debug("Fetching ill-formed datetime values with pagination...")
+            logging.info(f"[{self.__class__.__name__}] Fetching ill-formed datetime values with pagination...")
             for current_bindings in self._paginate_query(template, limit):
                 # group query results
                 for b in current_bindings:
@@ -720,7 +724,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
             logging.info(paradata)
         
         try:
-            logging.debug("Fetching ill-formed datetime values from RDF files...")
+            logging.info(f"[{self.__class__.__name__}] Fetching ill-formed datetime values from RDF files...")
 
             gentime_prop = 'http://www.w3.org/ns/prov#generatedAtTime'
             invaltime_prop = 'http://www.w3.org/ns/prov#invalidatedAtTime'
@@ -768,7 +772,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
         
         return result if not self.issues_log_fp else None  # if issues_log_fp is provided, the results are logged to the file and not returned
 
-    def batch_fix_illformed_datetimes(self, quads: Union[list, str], batch_size=200, checkpoint=None) -> None:
+    def batch_fix_illformed_datetimes(self, quads: Union[list, str], batch_size=200) -> None:
         """
         Replace the datetime object of each quad in ``quads`` with its correct version (offset-aware and without microseconds).
         Note that ``xsd:dateTime`` is always made explicit in newly inserted values.
@@ -795,12 +799,16 @@ class DateTimeFixer(ProvenanceIssueFixer):
         }
         ''')
 
+        ckpt_mg = self.checkpoint_mngr if self.issues_log_fp else None
+
+        logging.info(f"[{self.__class__.__name__}] Fixing ill-formed datetime values in batches...")
+
         for batch_idx, (batch, line_num) in checkpointed_batch(
             quads, 
             batch_size, 
             fixer_name=self.__class__.__name__, 
             phase="batch_fixed_illformed_datetimes", 
-            checkpoint=checkpoint
+            ckpnt_mngr=ckpt_mg
         ):
             try:
                 to_delete = []
@@ -824,13 +832,15 @@ class DateTimeFixer(ProvenanceIssueFixer):
                 raise e
         return None
 
-    def fix_issue(self, checkpoint=None, modified_graphs:dict=None):
+    def fix_issue(self, modified_graphs:dict=None):
+
+        ckpt_mg = self.checkpoint_mngr if self.issues_log_fp else None
 
         # step 0: detect ill-formed datetime values
         if not self.issues_log_fp:
             to_fix = self.detect_issue() # keep all the issues in memory
         else:
-            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint_mngr):
+            if not detection_completed(self.__class__.__name__, ckpt_mg):
                 if os.path.exists(self.issues_log_fp):
                     logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:
@@ -842,9 +852,9 @@ class DateTimeFixer(ProvenanceIssueFixer):
 
         # step 1:
         if not self.issues_log_fp:
-            self.batch_fix_illformed_datetimes(to_fix, checkpoint=checkpoint)
+            self.batch_fix_illformed_datetimes(to_fix)
         else:
-            self.batch_fix_illformed_datetimes(self.issues_log_fp, checkpoint=checkpoint)
+            self.batch_fix_illformed_datetimes(self.issues_log_fp)
         logging.info(f"[{self.__class__.__name__}] Fixing ill-formed datetime values terminated.")
 
 # (3) correct creation snapshots without primary source -> move to daughter class MissingPrimSourceFixer
@@ -852,14 +862,14 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to creation snapshots that do not have a primary source in the OpenCitations Meta provenance dataset.
     """
-    def __init__(self, endpoint: str, meta_dumps_pub_dates: List[Tuple[str, str]], dump_dir:str=None, issues_log_dir:Union[str, None]=None):
+    def __init__(self, endpoint: str, meta_dumps_pub_dates: List[Tuple[str, str]], dump_dir:str=None, issues_log_dir:Union[str, None]=None, checkpoint_fp='checkpoint.json'):
         """
         :param endpoint: The SPARQL endpoint URL.
         :type endpoint: str
         :param meta_dumps_pub_dates: Register of published OpenCitations Meta dumps, in the form: [(<ISO format date 1>, <dump DOI1>), (<ISO format date 2>, <dump DOI2>), ...]
         :type meta_dumps_pub_dates: List[Tuple[str, str]]
         """
-        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
+        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp)
         validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
         self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
     
@@ -903,7 +913,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
             logging.info(paradata)
 
         # Pagination loop
-        logging.debug("Fetching creation snapshots without a primary source with pagination...")
+        logging.info(f"[{self.__class__.__name__}] Fetching creation snapshots without a primary source with pagination...")
         try:
             for current_bindings in self._paginate_query(template, limit):
                 for b in current_bindings:
@@ -942,7 +952,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
         else:
             logging.info(paradata)
 
-        logging.debug("Fetching creation snapshots without a primary source from RDF files...")
+        logging.info(f"[{self.__class__.__name__}] Fetching creation snapshots without a primary source from RDF files...")
         try:
             for graph_obj in read_rdf_dump(self.dump_dir):
                 if graph_obj['@id'] in modified_graphs:
@@ -979,7 +989,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
         
         return results if not self.issues_log_fp else None  # (<snapshot uri>, <gen. time>)
     
-    def batch_insert_missing_primsource(self, creations_to_fix: Union[str, List[Tuple[str, str]]], batch_size=200, checkpoint=None):
+    def batch_insert_missing_primsource(self, creations_to_fix: Union[str, List[Tuple[str, str]]], batch_size=200):
         """
         Insert primary sources for creation snapshots that do not have one, in batches.
 
@@ -997,12 +1007,16 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
         }
         """)
 
+        ckpt_mg = self.checkpoint_mngr if self.issues_log_fp else None
+
+        logging.info(f"[{self.__class__.__name__}] Inserting missing primary sources in batches...")
+
         for batch_idx, (batch, line_num) in checkpointed_batch(
             creations_to_fix,
             batch_size,
             fixer_name=self.__class__.__name__, 
             phase="batch_insert_missing_primsource",
-            checkpoint=checkpoint
+            ckpnt_mngr=ckpt_mg
         ):
             try:
                 quads = []
@@ -1022,13 +1036,15 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
         return None
         
 
-    def fix_issue(self, checkpoint=None, modified_graphs:dict=None):
+    def fix_issue(self, modified_graphs:dict=None):
+
+        ckpt_mg = self.checkpoint_mngr if self.issues_log_fp else None
         
         # step 0: detect creation snapshots missing a primary source
         if not self.issues_log_fp:
             to_fix = self.detect_issue()
         else:
-            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint_mngr):
+            if not detection_completed(self.__class__.__name__, ckpt_mg):
                 if os.path.exists(self.issues_log_fp):
                     logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:
@@ -1040,9 +1056,9 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
 
         # step 1: insert primary source for the snapshots
         if not self.issues_log_fp:
-            self.batch_insert_missing_primsource(to_fix, checkpoint=checkpoint)
+            self.batch_insert_missing_primsource(to_fix)
         else:
-            self.batch_insert_missing_primsource(self.issues_log_fp, checkpoint=checkpoint)
+            self.batch_insert_missing_primsource(self.issues_log_fp)
         logging.info(f"[{self.__class__.__name__}] Fixing creation snapshots without a primary source terminated.")
 
 
@@ -1051,8 +1067,8 @@ class MultiPAFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to snapshots that have multiple objects for the ``prov:wasAttributedTo`` property in the OpenCitations Meta provenance dataset.
     """
-    def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None):
-        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
+    def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None, checkpoint_fp='checkpoint.json'):
+        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp)
 
     def detect_issue(self, limit=10000):
         """
@@ -1096,7 +1112,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
         else:
             logging.info(paradata)
 
-        logging.debug("Fetching snapshots with multiple objects for prov:wasAttributedTo...")
+        logging.info(f"[{self.__class__.__name__}] Fetching snapshots with multiple objects for prov:wasAttributedTo...")
         try:
             for current_bindings in self._paginate_query(template, limit):
                 for b in current_bindings:
@@ -1133,7 +1149,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
         else:
             logging.info(paradata)
 
-        logging.debug("Fetching snapshots with multiple objects for prov:wasAttributedTo from RDF files...")
+        logging.info(f"[{self.__class__.__name__}] Fetching snapshots with multiple objects for prov:wasAttributedTo from RDF files...")
         try:
             attribut_prop = 'http://www.w3.org/ns/prov#wasAttributedTo'
             default_val = 'https://w3id.org/oc/meta/prov/pa/1'
@@ -1167,7 +1183,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
         return result if not self.issues_log_fp else None
     
 
-    def batch_fix_extra_pa(self, multi_pa_snapshots:Union[str, List[Tuple[str]]], batch_size=200, checkpoint=None):
+    def batch_fix_extra_pa(self, multi_pa_snapshots:Union[str, List[Tuple[str]]], batch_size=200):
         """
         Delete triples where the value of ``prov:wasAttributedTo`` is <https://w3id.org/oc/meta/prov/pa/1> if there 
             is at least another processing agent for the same snapshot subject.
@@ -1190,12 +1206,16 @@ class MultiPAFixer(ProvenanceIssueFixer):
         }
         """)
 
+        ckpt_mg = self.checkpoint_mngr if self.issues_log_fp else None
+
+        logging.info(f"[{self.__class__.__name__}] Fixing snapshots with multiple processing agents in batches...")
+
         for batch_idx, (batch, line_num) in checkpointed_batch(
             multi_pa_snapshots,
             batch_size,
             fixer_name=self.__class__.__name__, 
             phase="batch_fix_extra_pa", 
-            checkpoint=checkpoint
+            ckpnt_mngr=ckpt_mg
         ):
             try:
                 to_delete = []
@@ -1217,13 +1237,15 @@ class MultiPAFixer(ProvenanceIssueFixer):
                 raise e
         return None
     
-    def fix_issue(self, checkpoint=None, modified_graphs:dict=None):
+    def fix_issue(self, modified_graphs:dict=None):
+
+        ckpt_mg = self.checkpoint_mngr if self.issues_log_fp else None
 
         # step 0: detect graph and snapshots that have an additional object besides the typical <https://w3id.org/oc/meta/prov/pa/1> for prov:wasAttributedTo
         if not self.issues_log_fp:
             to_fix = self.detect_issue()
         else:
-            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint_mngr):
+            if not detection_completed(self.__class__.__name__, ckpt_mg):
                 if os.path.exists(self.issues_log_fp):
                     logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:
@@ -1235,9 +1257,9 @@ class MultiPAFixer(ProvenanceIssueFixer):
 
         # step 1: delete all objects for prov:wasAttributedTo and insert only <https://w3id.org/oc/meta/prov/pa/2>
         if not self.issues_log_fp:
-            self.batch_fix_extra_pa(to_fix, checkpoint=checkpoint)
+            self.batch_fix_extra_pa(to_fix)
         else:
-            self.batch_fix_extra_pa(self.issues_log_fp, checkpoint=checkpoint)
+            self.batch_fix_extra_pa(self.issues_log_fp)
         logging.info(f"[{self.__class__.__name__}] Fixing graphs with multiple processing agents terminated.")
 
 
@@ -1246,12 +1268,12 @@ class MultiObjectFixer(ProvenanceIssueFixer):
     """
     A class to fix issues related to graphs where at least one snapshot has too many objects for specific properties in the OpenCitations Meta provenance dataset.
     """
-    def __init__(self, endpoint:str, meta_dumps_pub_dates: List[Tuple[str, str]], dump_dir:str=None, issues_log_dir:Union[str, None]=None):
+    def __init__(self, endpoint:str, meta_dumps_pub_dates: List[Tuple[str, str]], dump_dir:str=None, issues_log_dir:Union[str, None]=None, checkpoint_fp='checkpoint.json'):
         """
         :param meta_dumps_pub_dates: Register of published OpenCitations Meta dumps, in the form: [(<ISO format date 1>, <dump DOI1>), (<ISO format date 2>, <dump DOI2>), ...]
         :type meta_dumps_pub_dates: List[Tuple[str, str]]
         """
-        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir)
+        super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp)
         self.pa_uri = "https://w3id.org/oc/meta/prov/pa/1" # URI of the processing agent to be used as objects of prov:wasAtttributedTo for newly created snapshots, which is always the default one
         validate_meta_dumps_pub_dates(meta_dumps_pub_dates) # raises errors if something wrong
         self.meta_dumps_pub_dates = sorted([(date.fromisoformat(d), doi) for d, doi in meta_dumps_pub_dates], key=lambda x: x[0])
@@ -1304,7 +1326,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
             logging.info(paradata)
 
 
-        logging.debug("Fetching URIs of graphs containing snapshots with too many objects...")
+        logging.info(f"[{self.__class__.__name__}] Fetching URIs of graphs containing snapshots with too many objects...")
         try:
             for current_bindings in self._paginate_query(template, limit):
                 for b in current_bindings:
@@ -1340,7 +1362,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
             logging.info(paradata)
 
 
-        logging.debug("Fetching URIs of graphs containing snapshots with too many objects from RDF files...")
+        logging.info(f"[{self.__class__.__name__}] Fetching URIs of graphs containing snapshots with too many objects from RDF files...")
         try:
             inval_dt_prop = 'http://www.w3.org/ns/prov#invalidatedAtTime'
             prim_source_prop = 'http://www.w3.org/ns/prov#hadPrimarySource'
@@ -1391,7 +1413,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         return output if not self.issues_log_fp else None 
 
     
-    def reset_multi_object_graphs(self, graphs:Union[str, list], batch_size=200, checkpoint=None):
+    def reset_multi_object_graphs(self, graphs:Union[str, list], batch_size=200):
         """
         Reset each graph in ``graphs`` by deleting the existing snapshots and creating a new 
         creation snapshot, which will be the only one left for that graph.
@@ -1419,7 +1441,10 @@ class MultiObjectFixer(ProvenanceIssueFixer):
           }
         }
         """)
-        logging.debug("Resetting graphs with too many objects by creating a new single creation snapshot...")
+
+        ckpt_mg = self.checkpoint_mngr if self.issues_log_fp else None
+
+        logging.info(f"[{self.__class__.__name__}] Resetting graphs with too many objects by creating a new single creation snapshot...")
 
         # batch_size = 200  # updates are executed with individual queries anyway
 
@@ -1428,7 +1453,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
             batch_size, 
             fixer_name=self.__class__.__name__, 
             phase="reset_multi_object_graphs", 
-            checkpoint=checkpoint
+            ckpnt_mngr=ckpt_mg
         ):
             try:
                 for g, gen_time in batch:
@@ -1460,12 +1485,15 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         return None
 
 
-    def fix_issue(self, checkpoint=None, modified_graphs:dict=None):
+    def fix_issue(self, modified_graphs:dict=None):
+
+        ckpt_mg = self.checkpoint_mngr if self.issues_log_fp else None
+
         # step 0: detect graphs and snapshots with multiple objects for 1-cardinality properties
         if not self.issues_log_fp:
             to_fix = self.detect_issue()
         else:
-            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint_mngr):
+            if not detection_completed(self.__class__.__name__, ckpt_mg):
                 if os.path.exists(self.issues_log_fp):
                     logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:
@@ -1477,9 +1505,9 @@ class MultiObjectFixer(ProvenanceIssueFixer):
 
         # step 1: reset graphs with a snapshot having extra objects
         if not self.issues_log_fp:
-            self.reset_multi_object_graphs(to_fix, checkpoint=checkpoint)
+            self.reset_multi_object_graphs(to_fix)
         else:
-            self.reset_multi_object_graphs(self.issues_log_fp, checkpoint=checkpoint)
+            self.reset_multi_object_graphs(self.issues_log_fp)
         logging.info(f"[{self.__class__.__name__}] Fixing graphs with multiple objects for 1-cardinality properties terminated.")
 
 
@@ -1488,7 +1516,7 @@ def fix_process(
     meta_dumps_pub_dates: List[Tuple[str, str]],
     issues_log_dir: Union[str, None] = None,
     dry_run: bool = False,
-    checkpoint='checkpoint.json'
+    checkpoint_fp='checkpoint.json'
 ):
     """
     Function wrapping all the single fix operations into a single process,
@@ -1498,17 +1526,17 @@ def fix_process(
     :param meta_dumps_pub_dates: List of (date, url) tuples for meta dumps.
     :param issues_log_dir: Directory in which to write files storing detected issues.
     :param dry_run: If True, only print what would be done, don't actually do it.
-    :param checkpoint: Path to checkpoint file. If None, no checkpointing is performed.
+    :param checkpoint_fp: Path to checkpoint file. If None, no checkpointing is performed.
     """
 
-    ckpt_mngr = CheckpointManager(checkpoint) # checkpoint file will be deleted if program terminates succesfully
+    ckpt_mngr = CheckpointManager(checkpoint_fp) # checkpoint file will be deleted if program terminates succesfully
 
     fixers = (
-        FillerFixer(endpoint, issues_log_dir=issues_log_dir),
-        DateTimeFixer(endpoint, issues_log_dir=issues_log_dir),
-        MissingPrimSourceFixer(endpoint, meta_dumps_pub_dates, issues_log_dir=issues_log_dir),
-        MultiPAFixer(endpoint, issues_log_dir=issues_log_dir),
-        MultiObjectFixer(endpoint, meta_dumps_pub_dates, issues_log_dir=issues_log_dir),
+        FillerFixer(endpoint, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp),
+        DateTimeFixer(endpoint, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp),
+        MissingPrimSourceFixer(endpoint, meta_dumps_pub_dates, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp),
+        MultiPAFixer(endpoint, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp),
+        MultiObjectFixer(endpoint, meta_dumps_pub_dates, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp),
     )
     steps = tuple(fixer.__class__.__name__ for fixer in fixers)
 
@@ -1534,7 +1562,7 @@ def fix_process(
             # --- run fixer ---
             timer.start_phase()
             if not dry_run:
-                fixer.fix_issue(checkpoint=ckpt_mngr)
+                fixer.fix_issue()
             else:
                 logging.debug(f"[fix_process]: Would run {fixer.__class__.__name__}")
             phase_time = timer.end_phase()
@@ -1556,7 +1584,7 @@ def fix_process(
             logging.info(f"{fixer.__class__.__name__} completed.")
 
     # clear checkpoint only when the whole pipeline is done
-    logging.info("All fixing operations terminated.")
+    logging.info(" ----- All fixing operations terminated. ----- ")
     if ckpt_mngr:
         ckpt_mngr.clear()
     return None
@@ -1569,7 +1597,7 @@ def fix_process_reading_from_files(
     meta_dumps_pub_dates: List[Tuple[str, str]],
     issues_log_dir: str,
     dry_run: bool = False,
-    checkpoint='checkpoint.json'
+    checkpoint_fp='checkpoint.json'
 ):
     """
     Function wrapping all the single fix operations into a single process,
@@ -1580,17 +1608,17 @@ def fix_process_reading_from_files(
     :param meta_dumps_pub_dates: List of (date, url) tuples for meta dumps.
     :param issues_log_dir: Directory in which to write files storing detected issues.
     :param dry_run: If True, only print what would be done, don't actually do it.
-    :param checkpoint: Path to checkpoint file. If None, no checkpointing is performed.
+    :param checkpoint_fp: Path to checkpoint file. If None, no checkpointing is performed.
     """
 
-    ckpt_mngr = CheckpointManager(checkpoint) # checkpoint file will be deleted if program terminates succesfully
+    ckpt_mngr = CheckpointManager(checkpoint_fp) # checkpoint file will be deleted if program terminates succesfully
 
     fixers = (
-        FillerFixer(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir),
-        DateTimeFixer(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir),
-        MissingPrimSourceFixer(endpoint, meta_dumps_pub_dates, dump_dir=dump_dir, issues_log_dir=issues_log_dir),
-        MultiPAFixer(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir),
-        MultiObjectFixer(endpoint, meta_dumps_pub_dates, dump_dir=dump_dir, issues_log_dir=issues_log_dir),
+        FillerFixer(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp),
+        DateTimeFixer(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp),
+        MissingPrimSourceFixer(endpoint, meta_dumps_pub_dates, dump_dir=dump_dir, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp),
+        MultiPAFixer(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp),
+        MultiObjectFixer(endpoint, meta_dumps_pub_dates, dump_dir=dump_dir, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp),
     )
     steps = tuple(fixer.__class__.__name__ for fixer in fixers)
     timer = TimedProcess(total_phases=len(fixers))
@@ -1619,7 +1647,7 @@ def fix_process_reading_from_files(
             timer.start_phase()
             if not dry_run:
                 if i == 0: # i.e. FillerFixer
-                    fixer.fix_issue(checkpoint=ckpt_mngr)
+                    fixer.fix_issue()
                     mod_graphs_uris = load_modified_graphs_uris(fixer.issues_log_fp)
                     logging.info(f"Simulating FillerFixer changes for {len(mod_graphs_uris)} graphs...")
                     modified_graphs_mapping.update({g['@id']: simulate_ff_changes(g) for g in read_rdf_dump(dump_dir) if g['@id'] in mod_graphs_uris})
@@ -1632,7 +1660,7 @@ def fix_process_reading_from_files(
                 else: # i.e. all other fixers
                     with open(TMP_FILE_SIMULATED_GRAPHS, 'r', encoding='utf-8') as tf:
                         modified_graphs_mapping = json.load(tf)
-                    fixer.fix_issue(checkpoint=ckpt_mngr, modified_graphs=modified_graphs_mapping)
+                    fixer.fix_issue(modified_graphs=modified_graphs_mapping)
                 
             else:
                 logging.debug(f"[fix_process]: Would run {fixer.__class__.__name__}")
@@ -1655,7 +1683,7 @@ def fix_process_reading_from_files(
             logging.info(f"{fixer.__class__.__name__} completed.")
 
     # clear checkpoint and remove temp file for simulated graphs only when the whole pipeline is done
-    logging.info("All fixing operations terminated.")
+    logging.info(" ----- All fixing operations terminated. ----- ")
     if ckpt_mngr:
         ckpt_mngr.clear()
         if os.path.exists(TMP_FILE_SIMULATED_GRAPHS):

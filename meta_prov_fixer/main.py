@@ -93,7 +93,7 @@ def main():
             issues_log_dir=args.issues_log_dir,
             meta_dumps_pub_dates=args.meta_dumps,
             dry_run=args.dry_run,
-            checkpoint=args.checkpoint
+            checkpoint_fp=args.checkpoint
         )
     else:
         logging.info("Running pipeline in 'SPARQL endpoint' mode.")
@@ -102,7 +102,7 @@ def main():
             meta_dumps_pub_dates=args.meta_dumps,
             issues_log_dir=args.issues_log_dir or "data_to_fix",
             dry_run=args.dry_run,
-            checkpoint=args.checkpoint
+            checkpoint_fp=args.checkpoint
         )
 
     logging.info("Provenance fixing pipeline completed successfully.")

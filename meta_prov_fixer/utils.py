@@ -351,7 +351,7 @@ class CheckpointManager:
             os.remove(self.path)
 
 
-def checkpointed_batch(stream, batch_size, fixer_name=None, phase=None, checkpoint=Union[None, CheckpointManager]):
+def checkpointed_batch(stream, batch_size, fixer_name=None, phase=None, ckpnt_mngr=Union[None, CheckpointManager]):
     """
     Yield batches with optional checkpointing.
     - stream can be:
@@ -364,13 +364,13 @@ def checkpointed_batch(stream, batch_size, fixer_name=None, phase=None, checkpoi
     source_iter = chunker(stream, batch_size)
 
     # --- no checkpoint: just yield batches ---
-    if checkpoint is None:
+    if ckpnt_mngr is None:
         for idx, (batch, line_num) in enumerate(source_iter):
             yield idx, (batch, line_num)
         return
 
     # --- resumable checkpoint mode ---
-    state = checkpoint.load()
+    state = ckpnt_mngr.load()
     last_idx = -1
     if (
         state.get("fixer") == fixer_name
@@ -383,7 +383,7 @@ def checkpointed_batch(stream, batch_size, fixer_name=None, phase=None, checkpoi
         if idx <= last_idx:
             continue
         yield idx, (batch, line_num)
-        checkpoint.save(fixer_name, phase, idx)
+        ckpnt_mngr.save(fixer_name, phase, idx)
     
 # def save_detection_checkpoint(fixer_name=None, phase=None, checkpoint=Union[None, CheckpointManager]):
 #     """
@@ -395,22 +395,17 @@ def checkpointed_batch(stream, batch_size, fixer_name=None, phase=None, checkpoi
 #     else:
 #         checkpoint.save(fixer_name, phase, -1)
 
-def detection_completed(fixer_name=None, phase=None, checkpoint=Union[None, CheckpointManager])-> bool:
+def detection_completed(fixer_name=None, checkpoint=Union[None, CheckpointManager])-> bool:
     """
     Checks the state of the checkpoint to see if a given fixer's detection step is completed
     """
     if checkpoint:
         state = checkpoint.load()
-        # if (
-        #     state.get("fixer") == fixer_name
-        #     and state.get("phase") == phase
-        # ):
-        #     return True
         if state.get("fixer") == fixer_name:  # if detection is not completed, the checkpoint file should retain the name of the previous fixer
             return True
         else:
             return False
-    return True
+    return False
 
 
 class TimedProcess:

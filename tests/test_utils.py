@@ -304,7 +304,7 @@ class TestCheckpointing(unittest.TestCase):
                 return [1, 2, 3, 4, 5]
 
             # Call checkpointed_batch with a batch size of 2
-            result = list(checkpointed_batch(sample_func(), batch_size=2, fixer_name='sample_func', phase='done', checkpoint=cm))
+            result = list(checkpointed_batch(sample_func(), batch_size=2, fixer_name='sample_func', phase='done', ckpnt_mngr=cm))
 
             # Check that the result is correct
             self.assertEqual(result, [(0, ([1, 2], 2)), (1, ([3, 4], 4)), (2, ([5], 5))])
