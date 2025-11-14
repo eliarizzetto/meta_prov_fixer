@@ -111,7 +111,7 @@ class ProvenanceIssueFixer:
         self.dump_dir = dump_dir or None
         self.sparql.setReturnFormat(JSON)
         self.sparql.setMethod(POST)
-        self.checkpoint = CheckpointManager(checkpoint)
+        self.checkpoint_mngr = CheckpointManager(checkpoint)
         self.failed_queries_fp = f"prov_fix_failed_queries_{datetime.today().strftime('%Y-%m-%d')}.txt"
         
         if issues_log_dir:
@@ -317,7 +317,7 @@ class FillerFixer(ProvenanceIssueFixer):
                 res_log.close()
 
         if self.issues_log_fp:
-            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+            self.checkpoint_mngr.save(self.__class__.__name__, 'detection_done', -1)
         return list(dict(grouped_result).items()) if not self.issues_log_fp else None
     
     def detect_issue_from_files(self):
@@ -373,7 +373,7 @@ class FillerFixer(ProvenanceIssueFixer):
                 res_log.close()
 
         if self.issues_log_fp:
-            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+            self.checkpoint_mngr.save(self.__class__.__name__, 'detection_done', -1)
         return list(dict(grouped_result).items()) if not self.issues_log_fp else None
             
 
@@ -574,7 +574,7 @@ class FillerFixer(ProvenanceIssueFixer):
         if not self.issues_log_fp:
             to_fix = self.detect_issue() # keep all the issues in memory
         else:
-            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
+            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint_mngr):
                 if os.path.exists(self.issues_log_fp):
                     logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:
@@ -699,8 +699,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
                 res_log.close()
 
         if self.issues_log_fp:
-            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
-        
+            self.checkpoint_mngr.save(self.__class__.__name__, 'detection_done', -1)        
         return result if not self.issues_log_fp else None  # if issues_log_fp is provided, the results are logged to the file and not returned
 
     def detect_issue_from_files(self, modified_graphs:dict) -> List[Tuple[str]]:
@@ -765,7 +764,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
                 res_log.close()
 
         if self.issues_log_fp:
-            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+            self.checkpoint_mngr.save(self.__class__.__name__, 'detection_done', -1)
         
         return result if not self.issues_log_fp else None  # if issues_log_fp is provided, the results are logged to the file and not returned
 
@@ -831,7 +830,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
         if not self.issues_log_fp:
             to_fix = self.detect_issue() # keep all the issues in memory
         else:
-            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
+            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint_mngr):
                 if os.path.exists(self.issues_log_fp):
                     logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:
@@ -926,7 +925,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
                 res_log.close()
 
         if self.issues_log_fp:
-            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+            self.checkpoint_mngr.save(self.__class__.__name__, 'detection_done', -1)
         
         return results if not self.issues_log_fp else None  # (<snapshot uri>, <gen. time>)
 
@@ -976,7 +975,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
                 res_log.close()
 
         if self.issues_log_fp:
-            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+            self.checkpoint_mngr.save(self.__class__.__name__, 'detection_done', -1)
         
         return results if not self.issues_log_fp else None  # (<snapshot uri>, <gen. time>)
     
@@ -1029,7 +1028,7 @@ class MissingPrimSourceFixer(ProvenanceIssueFixer):
         if not self.issues_log_fp:
             to_fix = self.detect_issue()
         else:
-            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
+            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint_mngr):
                 if os.path.exists(self.issues_log_fp):
                     logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:
@@ -1117,7 +1116,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
                 res_log.close()
 
         if self.issues_log_fp:
-            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+            self.checkpoint_mngr.save(self.__class__.__name__, 'detection_done', -1)
         
         return result if not self.issues_log_fp else None 
     
@@ -1163,7 +1162,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
                 res_log.close()
 
         if self.issues_log_fp:
-            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+            self.checkpoint_mngr.save(self.__class__.__name__, 'detection_done', -1)
         
         return result if not self.issues_log_fp else None
     
@@ -1224,7 +1223,7 @@ class MultiPAFixer(ProvenanceIssueFixer):
         if not self.issues_log_fp:
             to_fix = self.detect_issue()
         else:
-            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
+            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint_mngr):
                 if os.path.exists(self.issues_log_fp):
                     logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:
@@ -1324,7 +1323,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
                 res_log.close()
 
         if self.issues_log_fp:
-            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+            self.checkpoint_mngr.save(self.__class__.__name__, 'detection_done', -1)
         
         return output if not self.issues_log_fp else None 
 
@@ -1387,7 +1386,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
                 res_log.close()
 
         if self.issues_log_fp:
-            save_detection_checkpoint(self.__class__.__name__, 'detection_done', self.checkpoint)
+            self.checkpoint_mngr.save(self.__class__.__name__, 'detection_done', -1)
         
         return output if not self.issues_log_fp else None 
 
@@ -1466,7 +1465,7 @@ class MultiObjectFixer(ProvenanceIssueFixer):
         if not self.issues_log_fp:
             to_fix = self.detect_issue()
         else:
-            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint):
+            if not detection_completed(self.__class__.__name__, 'detection_done', self.checkpoint_mngr):
                 if os.path.exists(self.issues_log_fp):
                     logging.warning(f"Issues log file {self.issues_log_fp} already exists and will be overwritten.")
                 if not self.dump_dir:

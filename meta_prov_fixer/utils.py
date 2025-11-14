@@ -385,15 +385,15 @@ def checkpointed_batch(stream, batch_size, fixer_name=None, phase=None, checkpoi
         yield idx, (batch, line_num)
         checkpoint.save(fixer_name, phase, idx)
     
-def save_detection_checkpoint(fixer_name=None, phase=None, checkpoint=Union[None, CheckpointManager]):
-    """
-    Saves to checkpoint the state indicating that a fixer's detection step has completed succesfully.
-    """
+# def save_detection_checkpoint(fixer_name=None, phase=None, checkpoint=Union[None, CheckpointManager]):
+#     """
+#     Saves to checkpoint the state indicating that a fixer's detection step has completed succesfully.
+#     """
 
-    if checkpoint is None:
-        return
-    else:
-        checkpoint.save(fixer_name, phase, -1)
+#     if checkpoint is None:
+#         return
+#     else:
+#         checkpoint.save(fixer_name, phase, -1)
 
 def detection_completed(fixer_name=None, phase=None, checkpoint=Union[None, CheckpointManager])-> bool:
     """
@@ -401,10 +401,12 @@ def detection_completed(fixer_name=None, phase=None, checkpoint=Union[None, Chec
     """
     if checkpoint:
         state = checkpoint.load()
-        if (
-            state.get("fixer") == fixer_name
-            and state.get("phase") == phase
-        ):
+        # if (
+        #     state.get("fixer") == fixer_name
+        #     and state.get("phase") == phase
+        # ):
+        #     return True
+        if state.get("fixer") == fixer_name:  # if detection is not completed, the checkpoint file should retain the name of the previous fixer
             return True
         else:
             return False
