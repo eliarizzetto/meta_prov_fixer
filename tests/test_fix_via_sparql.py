@@ -197,15 +197,15 @@ class TestFillerFixer(BaseTestCase):
 
     @patch.object(ProvenanceIssueFixer, '_update')
     @patch.object(ProvenanceIssueFixer, '_query')
-    def test_batch_delete_filler_snaphots(self, mock_query, mock_update):
+    def test_batch_fix_graphs_with_fillers(self, mock_query, mock_update):
         
         mock_query.side_effect = self.local_query
         mock_update.side_effect = self.local_update
 
         to_delete = self.fixer.detect_issue()
-        self.fixer.batch_delete_filler_snapshots(to_delete)
+        self.fixer.batch_fix_graphs_with_fillers(to_delete)
 
-        q = 'ASK {<https://w3id.org/oc/meta/br/0610491907/prov/se/2> ?p ?o}' # this should be deleted
+        q = 'ASK {<https://w3id.org/oc/meta/br/0610491907/prov/se/2> prov:generatedAtTime "2024-01-19T13:37:12Z"^^xsd:dateTime}' # this entity should be renamed 
         self.assertFalse(self.local_dataset.query(q).askAnswer)
     
 
@@ -474,6 +474,7 @@ class TestFixProcess(BaseTestCase):
             self.sparql_endpoint,
             self.meta_dumps_pub_dates,
             dry_run=self.dry_run,
+            checkpoint_fp='test_checkpoint.json'
         )
 
         self.assertEqual(
@@ -503,6 +504,7 @@ class TestFixProcess(BaseTestCase):
             self.meta_dumps_pub_dates,
             issues_log_dir='tests/data/fix_process_log',
             dry_run=self.dry_run,
+            checkpoint_fp='test_checkpoint.json'
         )
 
         self.assertEqual(
@@ -531,6 +533,7 @@ class TestFixProcess(BaseTestCase):
             self.meta_dumps_pub_dates,
             'tests/data/fix_process_log',
             dry_run=self.dry_run,
+            checkpoint_fp='test_checkpoint.json'
         )
 
         self.assertEqual(

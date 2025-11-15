@@ -377,9 +377,10 @@ class FillerFixer(ProvenanceIssueFixer):
         return list(dict(grouped_result).items()) if not self.issues_log_fp else None
             
 
-    def batch_delete_filler_snapshots(self, deletions: Union[str, List[Tuple[str, Dict[str, Set[str]]]]], batch_size=200) -> None:
+    def batch_fix_graphs_with_fillers(self, deletions: Union[str, List[Tuple[str, Dict[str, Set[str]]]]], batch_size=200) -> None:
         """
-        Deletes snapshots from the triplestore based on the provided deletions list.
+        Deletes snapshots from the triplestore based on the provided deletions list, renames the remaining snapshot entities with relevant URIs (in the 
+        whole dataset) and adapts the time relationships of the remaining entities (in the named graph that contained the filler snapshot(s)).
 
         :param deletions: A list object or the string filepath to a JSON file storing the object. 
             Each item/line is a tuple where the first element is a graph URI, 
@@ -387,11 +388,11 @@ class FillerFixer(ProvenanceIssueFixer):
         :type deletions: Union[str, List[Tuple[str, Dict[str, Set[str]]]]]
         """
 
-        template = Template("""
+        deletion_template = Template("""
             $dels
         """)
 
-        logging.info(f"[{self.__class__.__name__}] Deleting filler snapshots in batches...")
+        logging.info(f"[{self.__class__.__name__}] Fixing graphs with filler snapshots in batches...")
 
         ckpt_mg = self.checkpoint_mngr if self.issues_log_fp else None
 
@@ -399,10 +400,12 @@ class FillerFixer(ProvenanceIssueFixer):
             deletions, 
             batch_size, 
             fixer_name=self.__class__.__name__, 
-            phase="batch_delete",
+            phase="batch_fix_fillers",
             ckpnt_mngr=ckpt_mg
         ):
             try:
+
+                # step 1: delete filler snapshots in the role of subjects
                 dels = []
                 for g_uri, values in batch:
                     for se_to_delete in values['to_delete']:
@@ -410,14 +413,26 @@ class FillerFixer(ProvenanceIssueFixer):
                         dels.append(single_del)
                 dels_str = "    ".join(dels)
 
-                query = template.substitute(dels=dels_str)
+                query = deletion_template.substitute(dels=dels_str)
 
                 self._update(query)
-                logging.info(f"[{self.__class__.__name__}] Batch {batch_idx} (deletion) completed.")
+                logging.debug(f"[{self.__class__.__name__}] Deleted fillers for all graphs in Batch {batch_idx}. Fixing single quads in the same batch...")
+
+                # step 2: delete filler snapshots in the role of objects and rename rename remaining snapshots
+                for g, _dict in batch:
+                    mapping = self.map_se_names(_dict['to_delete'], _dict['remaining_snapshots'])
+                    self.rename_snapshots(mapping)
+
+                    # step 3: adapt values of prov:invalidatedAtTime for the entities existing now, identified by "new" URIs
+                    new_names = list(set(mapping.values()))
+                    self.adapt_invalidatedAtTime(g, new_names)
+                
+                logging.debug(f"[{self.__class__.__name__}] Batch {batch_idx} (filler deletion + renaming + adapting time sequence) completed.")
+            
             except Exception as e:
-                logging.error(f"Error while deleting filler snapshots in Batch {batch_idx}, lines {line_num-batch_size} to {line_num}: {e}")
-                print(f"Error while deleting filler snapshots in Batch {batch_idx}, lines {line_num-batch_size} to {line_num}: {e}")
-                raise e
+                logging.error(f"Error while fixing graph with filler snapshot(s) in Batch {batch_idx}, lines {line_num-batch_size} to {line_num}: {e}")
+                print(f"Error while while fixing graph with filler snapshot(s) in Batch {batch_idx}, lines {line_num-batch_size} to {line_num}: {e}")
+                raise e           
         return None
 
 
@@ -588,36 +603,35 @@ class FillerFixer(ProvenanceIssueFixer):
             else:
                 logging.warning(f"[{self.__class__.__name__}] Issues already detected: reading from file {self.issues_log_fp}")
 
-        # step 1: delete filler snapshots in the role of subjects
         if not self.issues_log_fp:
-            self.batch_delete_filler_snapshots(to_fix)
+            self.batch_fix_graphs_with_fillers(to_fix)
         else:
-            self.batch_delete_filler_snapshots(self.issues_log_fp)
+            self.batch_fix_graphs_with_fillers(self.issues_log_fp)
 
-        logging.info(f"Updating the graphs that had filler snapshots and the related resources in other graphs...")
+        # logging.info(f"Updating the graphs that had filler snapshots and the related resources in other graphs...")
 
-        if not self.issues_log_fp:
-            stream = to_fix
-        else:
-            stream = self.issues_log_fp
+        # if not self.issues_log_fp:
+        #     stream = to_fix
+        # else:
+        #     stream = self.issues_log_fp
         
-        for batch_idx, (batch, _) in checkpointed_batch(
-            stream, 
-            batch_size, 
-            fixer_name=self.__class__.__name__, 
-            phase="rename_and_adapt_datetime_sequence", 
-            ckpnt_mngr=ckpt_mg
-        ):
-            # step 2: delete filler snapshots in the role of objects and rename rename remaining snapshots
-            for g, _dict in batch:
-                mapping = self.map_se_names(_dict['to_delete'], _dict['remaining_snapshots'])
-                self.rename_snapshots(mapping)
+        # for batch_idx, (batch, _) in checkpointed_batch(
+        #     stream, 
+        #     batch_size, 
+        #     fixer_name=self.__class__.__name__, 
+        #     phase="rename_and_adapt_datetime_sequence", 
+        #     ckpnt_mngr=ckpt_mg
+        # ):
+        #     # step 2: delete filler snapshots in the role of objects and rename rename remaining snapshots
+        #     for g, _dict in batch:
+        #         mapping = self.map_se_names(_dict['to_delete'], _dict['remaining_snapshots'])
+        #         self.rename_snapshots(mapping)
 
-                # step 3: adapt values of prov:invalidatedAtTime for the entities existing now, identified by "new" URIs
-                new_names = list(set(mapping.values()))
-                self.adapt_invalidatedAtTime(g, new_names)
+        #         # step 3: adapt values of prov:invalidatedAtTime for the entities existing now, identified by "new" URIs
+        #         new_names = list(set(mapping.values()))
+        #         self.adapt_invalidatedAtTime(g, new_names)
             
-            logging.info(f"[{self.__class__.__name__}] Batch {batch_idx} (renaming snapshots + adapting time sequence) completed.")
+        #     logging.info(f"[{self.__class__.__name__}] Batch {batch_idx} (renaming snapshots + adapting time sequence) completed.")
         
         logging.info(f"[{self.__class__.__name__}] Fixing graphs with filler snapshots terminated.")
 
@@ -807,7 +821,7 @@ class DateTimeFixer(ProvenanceIssueFixer):
             quads, 
             batch_size, 
             fixer_name=self.__class__.__name__, 
-            phase="batch_fixed_illformed_datetimes", 
+            phase="batch_fix_illformed_datetimes", 
             ckpnt_mngr=ckpt_mg
         ):
             try:

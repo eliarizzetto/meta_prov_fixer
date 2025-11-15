@@ -378,6 +378,7 @@ def checkpointed_batch(stream, batch_size, fixer_name=None, phase=None, ckpnt_mn
         and "batch_idx" in state
     ):
         last_idx = state["batch_idx"]
+        logging.info(f"Resuming {fixer_name}, in phase {phase} from after batch {last_idx}")
 
     for idx, (batch, line_num) in enumerate(source_iter):
         if idx <= last_idx:
