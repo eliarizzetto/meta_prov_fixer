@@ -13,6 +13,7 @@ from rdflib.plugins.sparql.processor import SPARQLResult
 from rdflib import Dataset
 import json
 from urllib.error import HTTPError, URLError
+import contextlib
 
 # # OC Meta published RDF dumps publication dates and DOIs at the time of writing this code (2025-07-01).
 # meta_dumps_pub_dates = [
@@ -107,10 +108,10 @@ class ProvenanceIssueFixer:
         """
 
         self.endpoint = endpoint
-        self.sparql = SPARQLWrapper(self.endpoint)
+        # self.sparql = SPARQLWrapper(self.endpoint)
         self.dump_dir = dump_dir or None
-        self.sparql.setReturnFormat(JSON)
-        self.sparql.setMethod(POST)
+        # self.sparql.setReturnFormat(JSON)
+        # self.sparql.setMethod(POST)
         self.checkpoint_mngr = CheckpointManager(checkpoint_fp)
         self.failed_queries_fp = f"prov_fix_failed_queries_{datetime.today().strftime('%Y-%m-%d')}.txt"
         
@@ -127,25 +128,40 @@ class ProvenanceIssueFixer:
         time.sleep(0.1)  # slight delay to avoid overwhelming the endpoint
         for attempt in range(retries):
             try:
-                self.sparql.setQuery(query)
-                return self.sparql.query().convert()
+                # self.sparql.setQuery(query)
+                # return self.sparql.query().convert()
+
+                # create a new connection for ever query to avoid memory leak
+                sparql = SPARQLWrapper(self.endpoint)
+                sparql.setMethod(POST)
+                sparql.setQuery(query)
+
+                res = sparql.query()
+                with contextlib.closing(res.response):
+                    finalres = res.convert()
+                    res.response.read()
+
+                return finalres
             
             except HTTPError as e:
                 # Virtuoso is up, but rejected the query
                 if e.code == 503:
-                    logging.warning(f"[Attempt {attempt}] HTTP error 503: {e.reason}. Retrying...")
+                    logging.warning(f"[Attempt {attempt+1}] HTTP error 503: {e.reason}. Retrying...")
                 else:
-                    logging.warning(f"[Attempt {attempt}] HTTP error {e.code}: {e.reason}. Retrying...")
+                    logging.warning(f"[Attempt {attempt+1}] HTTP error {e.code}: {e.reason}. Retrying...")
 
             except URLError as e:
                 # Network-level errors (connection refused, dropped, etc.)
                 if "connection refused" in str(e.reason).lower():
-                    logging.error(f"[Attempt {attempt}] Virtuoso appears DOWN (connection refused). {e.reason}. Killing process.")
-                    raise e  # kill whole process
+                    logging.error(f"[Attempt {attempt+1}] Virtuoso appears DOWN (connection refused): {e.reason}. Retrying...")
+                    time.sleep(20.0)  # sleep additional 20 seconds in case Virtuoso is restarting
+                    if attempt == retries - 1:
+                        logging.error(f"[Attempt {attempt+1}] Virtuoso appeared DOWN (connection refused) for {retries} times: {e.reason}. Killing process.")
+                        raise e  # kill whole process
                 elif "closed connection" in str(e.reason).lower():
-                    logging.warning(f"[Attempt {attempt}] Connection closed mid-request (?). Retrying...")
+                    logging.warning(f"[Attempt {attempt+1}] Connection closed mid-request (?). Retrying...")
                 else:
-                    logging.warning(f"[Attempt {attempt}] URL error: {e.reason}")
+                    logging.warning(f"[Attempt {attempt+1}] URL error: {e.reason}")
 
             except Exception as e:  # catch-all for other exceptions
                 logging.warning(f"Attempt {attempt + 1} failed: {e}")
@@ -160,26 +176,42 @@ class ProvenanceIssueFixer:
         time.sleep(0.1)  # slight delay to avoid overwhelming the endpoint
         for attempt in range(retries):
             try:
-                self.sparql.setQuery(update_query)
-                self.sparql.query()
-                return
+                # self.sparql.setQuery(update_query)
+                # self.sparql.query()
+                # return
+
+                # create a new connection for ever query to avoid memory leak
+                sparql = SPARQLWrapper(self.endpoint)
+                sparql.setMethod(POST)
+                sparql.setQuery(update_query)
+
+                res = sparql.query()
+                with contextlib.closing(res.response):
+                    res.response.read()
+                return 
 
             except HTTPError as e:
                 # Virtuoso is up, but rejected the query
                 if e.code == 503:
-                    logging.warning(f"[Attempt {attempt}] HTTP error 503: {e.reason}. Retrying...")
+                    logging.warning(f"[Attempt {attempt+1}] HTTP error 503: {e.reason}. Retrying...")
                 else:
-                    logging.warning(f"[Attempt {attempt}] HTTP error {e.code}: {e.reason}. Retrying...")
+                    logging.warning(f"[Attempt {attempt+1}] HTTP error {e.code}: {e.reason}. Retrying...")
 
             except URLError as e:
                 # Network-level errors (connection refused, dropped, etc.)
                 if "connection refused" in str(e.reason).lower():
-                    logging.error(f"[Attempt {attempt}] Virtuoso appears DOWN (connection refused). {e.reason}. Killing process.")
-                    raise e  # kill whole process
+                    logging.error(f"[Attempt {attempt+1}] Virtuoso appears DOWN (connection refused): {e.reason}. Retrying...")
+                    time.sleep(20.0)  # sleep additional 20 seconds in case Virtuoso is restarting
+                    if attempt == retries -1:
+                        logging.error("Max retries reached. Update failed.")
+                        with open(self.failed_queries_fp, "a") as f:
+                            f.write(update_query.replace("\n", "\\n") + "\n")
+                        logging.error(f"[Attempt {attempt+1}] Virtuoso appeared DOWN (connection refused) for {retries} times: {e.reason}. Killing process.")
+                        raise e  # kill whole process
                 elif "closed connection" in str(e.reason).lower():
-                    logging.warning(f"[Attempt {attempt}] Connection closed mid-request (?). Retrying...")
+                    logging.warning(f"[Attempt {attempt+1}] Connection closed mid-request (?). Retrying...")
                 else:
-                    logging.warning(f"[Attempt {attempt}] URL error: {e.reason}")
+                    logging.warning(f"[Attempt {attempt+1}] URL error: {e.reason}")
                     
             except Exception as e: # catch-all for other exceptions
                 logging.warning(f"Attempt {attempt + 1} failed: {e}")
@@ -607,31 +639,6 @@ class FillerFixer(ProvenanceIssueFixer):
             self.batch_fix_graphs_with_fillers(to_fix)
         else:
             self.batch_fix_graphs_with_fillers(self.issues_log_fp)
-
-        # logging.info(f"Updating the graphs that had filler snapshots and the related resources in other graphs...")
-
-        # if not self.issues_log_fp:
-        #     stream = to_fix
-        # else:
-        #     stream = self.issues_log_fp
-        
-        # for batch_idx, (batch, _) in checkpointed_batch(
-        #     stream, 
-        #     batch_size, 
-        #     fixer_name=self.__class__.__name__, 
-        #     phase="rename_and_adapt_datetime_sequence", 
-        #     ckpnt_mngr=ckpt_mg
-        # ):
-        #     # step 2: delete filler snapshots in the role of objects and rename rename remaining snapshots
-        #     for g, _dict in batch:
-        #         mapping = self.map_se_names(_dict['to_delete'], _dict['remaining_snapshots'])
-        #         self.rename_snapshots(mapping)
-
-        #         # step 3: adapt values of prov:invalidatedAtTime for the entities existing now, identified by "new" URIs
-        #         new_names = list(set(mapping.values()))
-        #         self.adapt_invalidatedAtTime(g, new_names)
-            
-        #     logging.info(f"[{self.__class__.__name__}] Batch {batch_idx} (renaming snapshots + adapting time sequence) completed.")
         
         logging.info(f"[{self.__class__.__name__}] Fixing graphs with filler snapshots terminated.")
 
