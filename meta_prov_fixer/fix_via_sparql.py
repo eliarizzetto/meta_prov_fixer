@@ -146,19 +146,22 @@ class ProvenanceIssueFixer:
             except HTTPError as e:
                 # Virtuoso is up, but rejected the query
                 if e.code == 503:
-                    logging.warning(f"[Attempt {attempt}] HTTP error 503: {e.reason}. Retrying...")
+                    logging.warning(f"[Attempt {attempt+1}] HTTP error 503: {e.reason}. Retrying...")
                 else:
-                    logging.warning(f"[Attempt {attempt}] HTTP error {e.code}: {e.reason}. Retrying...")
+                    logging.warning(f"[Attempt {attempt+1}] HTTP error {e.code}: {e.reason}. Retrying...")
 
             except URLError as e:
                 # Network-level errors (connection refused, dropped, etc.)
                 if "connection refused" in str(e.reason).lower():
-                    logging.error(f"[Attempt {attempt}] Virtuoso appears DOWN (connection refused). {e.reason}. Killing process.")
-                    raise e  # kill whole process
+                    logging.error(f"[Attempt {attempt+1}] Virtuoso appears DOWN (connection refused): {e.reason}. Retrying...")
+                    time.sleep(20.0)  # sleep additional 20 seconds in case Virtuoso is restarting
+                    if attempt == retries - 1:
+                        logging.error(f"[Attempt {attempt+1}] Virtuoso appeared DOWN (connection refused) for {retries} times: {e.reason}. Killing process.")
+                        raise e  # kill whole process
                 elif "closed connection" in str(e.reason).lower():
-                    logging.warning(f"[Attempt {attempt}] Connection closed mid-request (?). Retrying...")
+                    logging.warning(f"[Attempt {attempt+1}] Connection closed mid-request (?). Retrying...")
                 else:
-                    logging.warning(f"[Attempt {attempt}] URL error: {e.reason}")
+                    logging.warning(f"[Attempt {attempt+1}] URL error: {e.reason}")
 
             except Exception as e:  # catch-all for other exceptions
                 logging.warning(f"Attempt {attempt + 1} failed: {e}")
@@ -190,19 +193,25 @@ class ProvenanceIssueFixer:
             except HTTPError as e:
                 # Virtuoso is up, but rejected the query
                 if e.code == 503:
-                    logging.warning(f"[Attempt {attempt}] HTTP error 503: {e.reason}. Retrying...")
+                    logging.warning(f"[Attempt {attempt+1}] HTTP error 503: {e.reason}. Retrying...")
                 else:
-                    logging.warning(f"[Attempt {attempt}] HTTP error {e.code}: {e.reason}. Retrying...")
+                    logging.warning(f"[Attempt {attempt+1}] HTTP error {e.code}: {e.reason}. Retrying...")
 
             except URLError as e:
                 # Network-level errors (connection refused, dropped, etc.)
                 if "connection refused" in str(e.reason).lower():
-                    logging.error(f"[Attempt {attempt}] Virtuoso appears DOWN (connection refused). {e.reason}. Killing process.")
-                    raise e  # kill whole process
+                    logging.error(f"[Attempt {attempt+1}] Virtuoso appears DOWN (connection refused): {e.reason}. Retrying...")
+                    time.sleep(20.0)  # sleep additional 20 seconds in case Virtuoso is restarting
+                    if attempt == retries -1:
+                        logging.error("Max retries reached. Update failed.")
+                        with open(self.failed_queries_fp, "a") as f:
+                            f.write(update_query.replace("\n", "\\n") + "\n")
+                        logging.error(f"[Attempt {attempt+1}] Virtuoso appeared DOWN (connection refused) for {retries} times: {e.reason}. Killing process.")
+                        raise e  # kill whole process
                 elif "closed connection" in str(e.reason).lower():
-                    logging.warning(f"[Attempt {attempt}] Connection closed mid-request (?). Retrying...")
+                    logging.warning(f"[Attempt {attempt+1}] Connection closed mid-request (?). Retrying...")
                 else:
-                    logging.warning(f"[Attempt {attempt}] URL error: {e.reason}")
+                    logging.warning(f"[Attempt {attempt+1}] URL error: {e.reason}")
                     
             except Exception as e: # catch-all for other exceptions
                 logging.warning(f"Attempt {attempt + 1} failed: {e}")
