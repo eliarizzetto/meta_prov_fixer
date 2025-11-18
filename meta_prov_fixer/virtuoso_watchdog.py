@@ -40,12 +40,15 @@ def monitor_and_restart(
             container = client.containers.get(container_name)
             stats = container.stats(stream=False)
 
+            ## Unlike the output of Docker CLI "stats" command, Docker API stats include 
+            ## cached memory in "usage", so subtract it out for measuring actual memory use.
             used = stats["memory_stats"]["usage"]
             limit = stats["memory_stats"]["limit"]
-            ratio = used / limit
+            cache = stats["memory_stats"]["stats"]["inactive_file"] # stores cached data
+            effective_used = used - cache
+            ratio = effective_used / limit
 
-            logging.info(f"[Virtuoso watchdog] Mem use: {used/1e9:.2f}GB / {limit/1e9:.2f}GB ({ratio*100:.1f}%)")
-
+            logging.info(f"[Virtuoso watchdog] Mem use: {effective_used/1e9:.2f}GB / {limit/1e9:.2f}GB ({ratio*100:.1f}%)")
             if ratio > threshold:
                 logging.warning(f"[Virtuoso watchdog] Memory above {threshold*100}% → restarting Virtuoso container")
 
