@@ -154,10 +154,10 @@ class ProvenanceIssueFixer:
                 # Network-level errors (connection refused, dropped, etc.)
                 if "connection refused" in str(e.reason).lower():
                     logging.error(f"[Attempt {attempt+1}] Virtuoso appears DOWN (connection refused): {e.reason}. Retrying...")
-                    time.sleep(20.0)  # sleep additional 20 seconds in case Virtuoso is restarting
                     if attempt == retries - 1:
                         logging.error(f"[Attempt {attempt+1}] Virtuoso appeared DOWN (connection refused) for {retries} times: {e.reason}. Killing process.")
                         raise e  # kill whole process
+                    time.sleep(60.0)  # sleep additional 60 seconds in case Virtuoso is restarting
                 elif "closed connection" in str(e.reason).lower():
                     logging.warning(f"[Attempt {attempt+1}] Connection closed mid-request (?). Retrying...")
                 else:
@@ -201,13 +201,13 @@ class ProvenanceIssueFixer:
                 # Network-level errors (connection refused, dropped, etc.)
                 if "connection refused" in str(e.reason).lower():
                     logging.error(f"[Attempt {attempt+1}] Virtuoso appears DOWN (connection refused): {e.reason}. Retrying...")
-                    time.sleep(20.0)  # sleep additional 20 seconds in case Virtuoso is restarting
                     if attempt == retries -1:
                         logging.error("Max retries reached. Update failed.")
                         with open(self.failed_queries_fp, "a") as f:
                             f.write(update_query.replace("\n", "\\n") + "\n")
                         logging.error(f"[Attempt {attempt+1}] Virtuoso appeared DOWN (connection refused) for {retries} times: {e.reason}. Killing process.")
                         raise e  # kill whole process
+                    time.sleep(60.0)  # sleep additional 60 seconds in case Virtuoso is restarting
                 elif "closed connection" in str(e.reason).lower():
                     logging.warning(f"[Attempt {attempt+1}] Connection closed mid-request (?). Retrying...")
                 else:

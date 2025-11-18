@@ -2,7 +2,7 @@
 
 A small toolkit and pipeline to detect and fix provenance issues in the OpenCitations "Meta" dataset.
 
-This repository provides a set of fixers that run detection queries (either against a SPARQL endpoint or reading local RDF dump files) and apply corrective updates to the triplestore. The pipeline coordinates the fixers, supports checkpointing, logging and a dry-run mode for safe testing.
+This repository provides a set of fixers that run detection queries (either against a SPARQL endpoint or reading local RDF dump files) and apply corrective updates to the triplestore. The pipeline coordinates the fixers, supports checkpointing, and logging.
 
 ## Features
 
@@ -18,14 +18,28 @@ This repository provides a set of fixers that run detection queries (either agai
   - SPARQL endpoint mode (detect issues by querying an endpoint and apply fixes)
   - File-based detection mode (read RDF/JSON-LD dumps locally for detection and still apply fixes to the endpoint)
 
+- Optional auto-restart of Virtuoso DB to prevent OOM error (only for dockerized Virtuoso instances)
+
 ## Requirements
 
-The project uses Python 3.11 (see `pyproject.toml`). Key runtime dependencies are:
+The project uses Python 3.11 and manages dependencies with Python Poetry (see `pyproject.toml`). Key runtime dependencies are:
 
 - rdflib
 - SPARQLWrapper
 - tqdm
 - tzdata
+- docker
+
+Make sure you have Poetry installed. Then, install dependencies with:
+
+```bash
+poetry install
+```
+and activate the virtual environment with:
+
+```bash
+poetry env activate # for Poetry >= 2.2
+```
 
 Note: the project provides development dependencies (pytest, notebook, pandas) in `pyproject.toml`.
 
@@ -40,25 +54,33 @@ The main CLI entrypoint is `meta_prov_fixer/main.py`. It accepts the following o
 - `-c, --checkpoint` — Path to a checkpoint file (default: `checkpoint.json`).
 - `--dry-run` — Run pipeline in dry-run mode (no updates applied; useful for debugging).
 - `-l, --log-fp` — File path for pipeline logs. Defaults to `provenance_fix_<today>.log`.
+- `-r, --auto-restart-container` — If set, enables a memory watchdog that automatically restarts the Virtuoso Docker container when Virtuoso's memory usage exceeds 98% of the total memory allocated to the container.
+- `-v, --virtuoso-container` — Name of the Virtuoso Docker container (required when `--auto-restart-container` is used).
 
 Examples:
 
 Detect issues from the SPARQL endpoint and apply fixes (only applicable with small datasets, due to memory limits):
 
 ```shell
-python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json
+poetry run python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json
 ```
 
 Detect issues from the SPARQL endpoint, save them to disk, and apply fixes (might incur in timeout errors if the dataset is very large):
 
 ```shell
-python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json -i ./data_to_fix
+poetry run python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json -i ./data_to_fix
 ```
 
 Detect issues by reading RDF dump files, store issues to disk, then apply fixes to the endpoint (particularly useful with large datasets):
 
 ```shell
-python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json -i ./data_to_fix -d C:/path/to/rdf/dumps
+poetry run python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json -i ./data_to_fix -d C:/path/to/rdf/dumps
+```
+
+Detect issues from RDF files and fix on DB, automatically restarting Virtuoso Docker container if memory usage exceeds 98%:
+
+```shell
+poetry run python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json -i ./data_to_fix -d "/meta/dump/directory/" -r -v <container_name>
 ```
 
 ## Input format for `--meta-dumps`
@@ -93,10 +115,10 @@ The date format must be ISO-style (YYYY-MM-DD). The CLI loader validates the str
   - `main.py` — CLI entrypoint and argument parsing (this file)
   - `fix_via_sparql.py` — fixer implementations and the pipeline orchestration (detection and update logic)
   - `utils.py` — shared helpers (checkpoint management, RDF dump reading, small utilities)
-- `tests/` — unit tests (pytest)
+- `tests/` — unit tests
 
 ## Developer notes
 
 - Use `--dry-run` to validate detection and simulate the pipeline without executing queries.
 - When using file-based detection (`--dump-dir`), supply `--issues-log-dir` so detected issues are stored as JSONL files; those files can be inspected or edited and then used by the same pipeline to apply updates.
-- The pipeline uses a per-fixer checkpointing mechanism so long-running runs can be resumed after interruptions.
+- The pipeline uses a per-fixer and per-phase checkpointing mechanism so long-running runs can be resumed after interruptions.
