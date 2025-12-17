@@ -45,6 +45,7 @@ class FillerFixerFile:
 
         for s in snapshots:
             if s == creation_se:
+                remaining.add(s)
                 continue
             if (s, URIRef('https://w3id.org/oc/ontology/hasUpdateQuery'), None) not in graph:
                 if (s, DCTERMS.description, None) not in graph:
