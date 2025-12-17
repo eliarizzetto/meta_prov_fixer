@@ -93,6 +93,30 @@ def simulate_ff_changes(local_named_graph:dict) -> dict:
 
 
 
+def make_ff_rename_mapping(issues_fp, mapping_fp):
+    """
+    Maps the old name (URI) of the snapshots in a graph with a filler to their new name,
+    and stores the dictionary to a JSON file.
+    
+    :param issues_fp: the path to the file storing the results of `FillerFixer.detect_issue()`
+    :param mapping_fp: the path to the file where to store the name mapping.
+    """
+
+    general_mapping = dict()
+    for line in chunker(issues_fp):
+        to_delete:set = line[1]['to_delete']
+        to_rename:set = line[1]['remaining_snapshots']
+        renaming = FillerFixer.map_se_names(to_delete, to_rename)
+        for old_name, new_name in renaming.items():
+            if old_name != new_name:
+                general_mapping[old_name] = new_name
+    
+    with open(mapping_fp, 'r', encoding='utf-8') as out:
+        json.dump(general_mapping, out)
+    
+    return
+
+
 class ProvenanceIssueFixer:
     def __init__(self, endpoint: str, dump_dir:Union[str, None]=None, issues_log_dir:Union[str, None]=None, checkpoint_fp='checkpoint.json'):
         """
@@ -651,8 +675,8 @@ class DateTimeFixer(ProvenanceIssueFixer):
     The following datetime formats are considered ill-formed or to be normalized:
     - Datetime values without timezone information (e.g. 2020-04-22T12:00:00).
     - Datetime values including microseconds (e.g. 2020-04-22T12:00:00.123456Z).
-    - Datetime values with timezone offsets different from UTC or specified in other formats than 'Z' (e.g. 2020-04-22T12:00:00+00:00).
-    - All or some of the above combined (e.g. 2020-04-22T12:00:00.123456+00:00).
+    - Datetime values with timezone offsets different from UTC (e.g. 2020-04-22T12:00:00+01:00).
+    - All or some of the above combined (e.g. 2020-04-22T12:00:00.123456+02:00).
     """
     def __init__(self, endpoint: str, dump_dir:str=None, issues_log_dir:Union[str, None]=None, checkpoint_fp='checkpoint.json'):
         super().__init__(endpoint, dump_dir=dump_dir, issues_log_dir=issues_log_dir, checkpoint_fp=checkpoint_fp)
@@ -1707,7 +1731,7 @@ def fix_process_reading_from_files(
     logging.info(" ----- All fixing operations terminated. ----- ")
     if ckpt_mngr:
         ckpt_mngr.clear()
-        if os.path.exists(TMP_FILE_SIMULATED_GRAPHS):
-            os.remove(TMP_FILE_SIMULATED_GRAPHS) # remove temp file storing simulated graphs
+        # if os.path.exists(TMP_FILE_SIMULATED_GRAPHS):
+        #     os.remove(TMP_FILE_SIMULATED_GRAPHS) # remove temp file storing simulated graphs
 
     return None

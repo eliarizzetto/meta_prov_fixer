@@ -16,6 +16,7 @@ import functools
 import inspect
 import logging
 import tempfile
+from itertools import islice
 
 
 
@@ -191,19 +192,19 @@ def get_previous_meta_dump_uri(meta_dumps_pub_dates, dt:str)-> str:
     .. code-block:: python
 
         meta_dumps_pub_dates = [
-            ('2022-12-19', 'https://doi.org/10.6084/m9.figshare.21747536.v1'),
-            ('2022-12-20', 'https://doi.org/10.6084/m9.figshare.21747536.v2'),
-            ('2023-02-15', 'https://doi.org/10.6084/m9.figshare.21747536.v3'),
-            ('2023-06-28', 'https://doi.org/10.6084/m9.figshare.21747536.v4'),
-            ('2023-10-26', 'https://doi.org/10.6084/m9.figshare.21747536.v5'),
-            ('2024-04-06', 'https://doi.org/10.6084/m9.figshare.21747536.v6'),
-            ('2024-06-17', 'https://doi.org/10.6084/m9.figshare.21747536.v7'),
-            ('2025-02-02', 'https://doi.org/10.6084/m9.figshare.21747536.v8'),
-            ('2025-07-10', 'https://doi.org/10.5281/zenodo.15855112')
+            (datetime.date(2022, 12, 19), 'https://doi.org/10.6084/m9.figshare.21747536.v1'),
+            (datetime.date(2022, 12, 20), 'https://doi.org/10.6084/m9.figshare.21747536.v2'),
+            (datetime.date(2023, 02, 15), 'https://doi.org/10.6084/m9.figshare.21747536.v3'),
+            (datetime.date(2023, 06, 28), 'https://doi.org/10.6084/m9.figshare.21747536.v4'),
+            (datetime.date(2023, 10, 26), 'https://doi.org/10.6084/m9.figshare.21747536.v5'),
+            (datetime.date(2024, 04, 06), 'https://doi.org/10.6084/m9.figshare.21747536.v6'),
+            (datetime.date(2024, 06, 17), 'https://doi.org/10.6084/m9.figshare.21747536.v7'),
+            (datetime.date(2025, 02, 02), 'https://doi.org/10.6084/m9.figshare.21747536.v8'),
+            (datetime.date(2025, 07, 10), 'https://doi.org/10.5281/zenodo.15855112')
         ]
 
     :param meta_dumps_pub_dates: List of tuples (date, DOI) for Meta dumps.
-    :type meta_dumps_pub_dates: list
+    :type meta_dumps_pub_dates: list of `datetime.date` objects.
     :param dt: A date string in ISO format (YYYY-MM-DD).
     :type dt: str
     :returns: The DOI of the previous Meta dump.
@@ -434,46 +435,132 @@ class TimedProcess:
         return elapsed, remaining
 
 
-def read_rdf_dump(data_dir: str) -> Generator[dict, None, None]:
-    """
-    Iterates over the files in any given directory storing OpenCitations Meta RDF **PROVENANCE** files
-    and yields the JSON-LD data as a list of dictionaries.
+# def read_rdf_dump(data_dir: str, whole_file=False) -> Union[Generator[dict, None, None], Generator[List, None, None]]:
+#     """
+#     Iterates over the files in any given directory storing OpenCitations Meta RDF **PROVENANCE** files
+#     and yields the JSON-LD data. If `whole_file` is False (default), yields single named graphs as 
+#     dictionaries, else if `whole_file` is True yields the whole parsed JSON file as a list of dictionaries.
    
-    :param data_dir: Path to the directory containing the decompressed provenance archive.
-    :yield: Dictionary corresponding to a provenance graph, in JSON-LD format.
-    """
+#     :param data_dir: Path to the directory containing the decompressed provenance archive.
+#     :param whole_file: (default: False) If True, yield whole files, else single named graphs.
+#     :yield: Dictionary or list of dictionaries corrisponding to (a) named graph(s).
+#     """
 
 
+#     for dirpath, _, filenames in os.walk(data_dir):
+#         if os.path.basename(dirpath) == 'prov':
+#             for fn in filenames:
+
+#                 fp = os.path.join(dirpath,fn)
+
+#                 if fp.endswith('.zip'):
+#                     with ZipFile(fp) as archive:  # Handle zip files
+#                         for f in archive.filelist:
+#                             if f.filename.endswith('.json'):
+#                                 with archive.open(f.filename) as f:
+#                                     data = json.load(f)
+#                                     if not whole_file:
+#                                         for g in data:
+#                                             yield g
+#                                     else:
+#                                         yield data
+
+#                 elif fp.endswith('.json.xz'):  # Handle lzma2 (.xz) files
+#                     with lzma.open(fp, 'rt', encoding='utf-8') as f:
+#                         data = json.load(f)
+#                         if not whole_file:
+#                             for g in data:
+#                                 yield g
+#                         else:
+#                             yield data
+                
+#                 elif fp.endswith('.json'):  # assumes files are already decompressed
+#                     # continue if there is a compressed file with the same name in the same directory
+#                     if os.path.exists(fp + '.xz') or os.path.exists(fp.removesuffix('.json') + '.zip'):
+#                         continue
+                    
+#                     with open(fp, 'r', encoding='utf-8') as f:
+#                         data = json.load(f)
+#                         if not whole_file:
+#                             for g in data:
+#                                 yield g
+#                         else:
+#                             yield data
+
+
+def get_rdf_prov_filepaths(data_dir):
+
+    paths = []
     for dirpath, _, filenames in os.walk(data_dir):
         if os.path.basename(dirpath) == 'prov':
             for fn in filenames:
+                fp = os.path.join(dirpath, fn)
+                if fp.endswith(('.zip', '.json.xz', '.json')):
+                    paths.append(fp)
+    return paths
 
-                fp = os.path.join(dirpath,fn)
 
-                if fp.endswith('.zip'):
-                    with ZipFile(fp) as archive:  # Handle zip files
-                        for f in archive.filelist:
-                            if f.filename.endswith('.json'):
-                                with archive.open(f.filename) as f:
-                                    data = json.load(f)
-                                    for g in data:
-                                        yield g
+def read_rdf_dump(data_dir:str, whole_file:bool=False, ordered:bool=True, include_fp=False) -> Generator[Union[dict, list, tuple], None, None]:
+    """
+    Iterates over the files in any given directory storing OpenCitations Meta RDF **PROVENANCE** files
+    and yields the JSON-LD data. If `whole_file` is False (default), yields single named graphs as
+    dictionaries, else if `whole_file` is True yields the whole parsed JSON file as a list of dictionaries.
 
-                elif fp.endswith('.json.xz'):  # Handle lzma2 (.xz) files
-                    with lzma.open(fp, 'rt', encoding='utf-8') as f:
-                            data = json.load(f)
-                            for g in data:
-                                yield g
-                
-                elif fp.endswith('.json'):  # assumes files are already decompressed
-                    # continue if there is a compressed file with the same name in the same directory
-                    if os.path.exists(fp + '.xz') or os.path.exists(fp.removesuffix('.json') + '.zip'):
-                        continue
-                    
-                    with open(fp, 'r', encoding='utf-8') as f:
+    :param data_dir: Path to the directory containing the decompressed provenance archive.
+    :param whole_file: (default: False) If True, yield whole files, else single named graphs.
+    :param ordered: (default: True) If True, sort all files to process deterministically.
+    :param include_fp: (default: False) If True, yield a tuple where the second element is a filepath.
+    :yield: Dictionary or list of dictionaries corresponding to (a) named graph(s). If include_fp is True, yields a tuple
+        where the second element is the path of the file from which the graph or dataset was parsed.
+    """
+
+    paths = get_rdf_prov_filepaths(data_dir)
+    
+    if ordered:
+        paths.sort()  # deterministic global order
+
+    for fp in paths:
+
+        # ZIP archives
+        if fp.endswith('.zip'):
+            with ZipFile(fp) as archive:
+                members = [f for f in archive.filelist if f.filename.endswith('.json')]
+                if ordered:
+                    members.sort(key=lambda z: z.filename)
+
+                for m in members:
+                    with archive.open(m.filename) as f:
                         data = json.load(f)
-                        for g in data:
-                            yield g
+                        if not whole_file:
+                            for g in data:
+                                yield g if not include_fp else (g, fp)
+                        else:
+                            yield data if not include_fp else (data, fp)
+
+        # LZMA (.json.xz)
+        elif fp.endswith('.json.xz'):
+            with lzma.open(fp, 'rt', encoding='utf-8') as f:
+                data = json.load(f)
+                if not whole_file:
+                    for g in data:
+                        yield g if not include_fp else (g, fp)
+                else:
+                    yield data if not include_fp else (data, fp)
+
+        # Plain JSON
+        elif fp.endswith('.json'):
+            # skip if compressed duplicate exists
+            if os.path.exists(fp + '.xz') or os.path.exists(fp.removesuffix('.json') + '.zip'):
+                continue
+
+            with open(fp, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if not whole_file:
+                    for g in data:
+                        yield g if not include_fp else (g, fp)
+                else:
+                    yield data if not include_fp else (data, fp)
+
 
 
 def load_modified_graphs_uris(stream:Union[str, Iterable]) -> set:
@@ -484,3 +571,13 @@ def load_modified_graphs_uris(stream:Union[str, Iterable]) -> set:
     return deleted
 
 
+def batched(iterable, n, strict=False):
+    # batched('ABCDEFG', 2) → AB CD EF G
+    # see https://docs.python.org/3/library/itertools.html#itertools.batched (only for python >= 3.13)
+    if n < 1:
+        raise ValueError('n must be at least one')
+    iterator = iter(iterable)
+    while batch := tuple(islice(iterator, n)):
+        if strict and len(batch) != n:
+            raise ValueError('batched(): incomplete batch')
+        yield batch
