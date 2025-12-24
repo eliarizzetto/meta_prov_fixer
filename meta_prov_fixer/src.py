@@ -10,7 +10,7 @@ import json
 from tqdm import tqdm
 from sparqlite import SPARQLClient, QueryError, EndpointError
 from typing import TextIO
-from datetime import datetime
+from datetime import datetime, date
 import os
 from pathlib import Path
 
@@ -152,26 +152,43 @@ class FillerFixerFile:
         return out
 
     
-    def fix_local_graph(ds: Dataset, graph:Graph, global_rename_map:dict) -> None:
+    def fix_local_graph(ds: Dataset, graph:Graph, global_rename_map:dict, fillers_issues_lookup:dict) -> None:
 
         # delete all triples where subject is a filler (in local graph)
-        for snapshot_node, _, _  in graph.triples((None, None, None)):
-            if snapshot_node in global_rename_map:
-                ds.remove((URIRef(snapshot_node), None, None))
+        for snapshot_node, _, _, _  in ds.quads((None, None, None, graph.identifier)):
+            if str(snapshot_node) in global_rename_map:
+                if snapshot_node in fillers_issues_lookup[graph.identifier]['to_delete']:
+                    ds.remove((URIRef(snapshot_node), None, None, graph.identifier))
         
         # replace objects that used to be fillers snapshots (in this graph or in other graphs, using global mapping)
-        for subj, pred, obj in graph.triples((None, None, None)):
+        for subj, pred, obj, _ in ds.quads((None, None, None, graph.identifier)):
+            new_subj_name = subj
+            new_obj_name = obj
+            if str(subj) in global_rename_map:
+                new_subj_name = URIRef(global_rename_map.get(str(subj), subj))
             if str(obj) in global_rename_map:
-                replacement = URIRef(global_rename_map[str(obj)])
-                ds.set((subj, pred, replacement))
+                new_obj_name = URIRef(global_rename_map.get(str(obj), obj))
+            if (new_subj_name!=subj) or (new_obj_name!=obj):
+                ds.remove((subj, pred, obj, graph.identifier))
+                ds.add((new_subj_name, pred, new_obj_name, graph.identifier))
 
         # adapt invalidatedAtTime relationships (in local graph only)
-        snapshots_strings:list = sorted(list(str(s) for s in graph.subjects(unique=True)), key=lambda x: get_seq_num(x))
-        for s, following_se in zip(snapshots_strings, snapshots_strings[1:]):
-            new_invaldt:URIRef = min(list(graph.objects(URIRef(following_se), PROV.generatedAtTime, unique=True)))
-            ds.set((URIRef(s), PROV.invalidatedAtTime, new_invaldt))
+        unsorted_curr_snpsts_strngs = []
+        for s in ds.graph(graph.identifier).subjects(unique=True):
+            unsorted_curr_snpsts_strngs.append(str(s))
+        snapshots_strings:list = sorted(unsorted_curr_snpsts_strngs, key=lambda x: get_seq_num(str(x)))
 
-    def build_delete_sparql_query(local_deletions:Union[tuple, list])->str:
+        for s, following_se in zip(snapshots_strings, snapshots_strings[1:]):
+            new_invaldt = min(
+                list(ds.graph(graph.identifier).objects(URIRef(following_se), PROV.generatedAtTime, unique=True)),
+                key=lambda x: normalise_datetime(str(x))
+            )
+            # ds.set((URIRef(s), PROV.invalidatedAtTime, new_invaldt))
+            for old_invaldt in ds.graph(graph.identifier).objects(URIRef(s), PROV.invalidatedAtTime, unique=True):
+                ds.remove((URIRef(s), PROV.invalidatedAtTime, old_invaldt, graph.identifier))
+            ds.add((URIRef(s), PROV.invalidatedAtTime, new_invaldt, graph.identifier))
+
+    def build_delete_sparql_query(local_deletions:tuple)->str:
         """
         Makes the SPARQL query text for deleting snapshots from the triplestore based on the provided deletions list.
 
@@ -185,10 +202,10 @@ class FillerFixerFile:
 
         # step 1: delete filler snapshots in the role of subjects
         dels = []
-        for g_uri, values in local_deletions:
-            for se_to_delete in values['to_delete']:
-                single_del = f"DELETE WHERE {{ GRAPH <{str(g_uri)}> {{ <{str(se_to_delete)}> ?p ?o . }}}};\n"
-                dels.append(single_del)
+        g_uri, values = local_deletions
+        for se_to_delete in values['to_delete']:
+            single_del = f"DELETE WHERE {{ GRAPH <{str(g_uri)}> {{ <{str(se_to_delete)}> ?p ?o . }}}};\n"
+            dels.append(single_del)
         dels_str = "    ".join(dels)
         query_str = deletion_template.substitute(dels=dels_str)
         return query_str
@@ -309,7 +326,9 @@ class DateTimeFixerFile:
 
         for g_uri, subj, prop, obj in to_fix:
             correct_dt_res = Literal(normalise_datetime(str(obj)), datatype=XSD.dateTime)
-            ds.set((subj, prop, correct_dt_res))
+            # ds.set((subj, prop, correct_dt_res))
+            ds.remove((subj, prop, obj, g_uri))
+            ds.add((subj, prop, correct_dt_res, g_uri))
     
     def build_update_query(to_fix:List[Tuple[URIRef]]):
         template = Template('''
@@ -325,7 +344,7 @@ class DateTimeFixerFile:
 
         to_delete = []
         to_insert = []
-        for g, s, p, dt in to_fix:
+        for g, s, p, dt in list(to_fix):
             g = str(g)
             s = str(s)
             p = str(p)
@@ -335,8 +354,8 @@ class DateTimeFixerFile:
             correct_dt = normalise_datetime(dt)
             to_insert.append(f'GRAPH <{g}> {{ <{s}> <{p}> "{correct_dt}"^^xsd:dateTime . }}\n')
         
-        to_delete_str = "  ".join(to_delete)
-        to_insert_str = "  ".join(to_insert)
+        to_delete_str = "\n  ".join(to_delete)
+        to_insert_str = "\n  ".join(to_insert)
         query = template.substitute(to_delete=to_delete_str, to_insert=to_insert_str)
         return query
 
@@ -356,8 +375,8 @@ class MissingPrimSourceFixerFile:
     def fix_local_graph(ds:Dataset, graph:Graph, to_fix:tuple, meta_dumps) -> None:
         
         primSource_str = get_previous_meta_dump_uri(meta_dumps, str(to_fix[1]))
-        primSource_literal = Literal(primSource_str)
-        ds.add((to_fix[0], PROV.hadPrimarySource, primSource_literal, graph.identifier))
+        # primSource_literal = Literal(primSource_str)
+        ds.add((to_fix[0], PROV.hadPrimarySource, URIRef(primSource_str), graph.identifier))
     
 
     def build_update_query(to_fix:List[Tuple[URIRef, Literal]], meta_dumps):
@@ -402,7 +421,10 @@ class MultiPAFixerFile:
     def fix_local_graph(ds:Dataset, graph:Graph, to_fix:List[Tuple[URIRef]]) -> None:
         
         for g_uri, subj in to_fix:
-            ds.set((subj, PROV.wasAttributedTo, URIRef('https://w3id.org/oc/meta/prov/pa/2')))
+            # ds.set((subj, PROV.wasAttributedTo, URIRef('https://w3id.org/oc/meta/prov/pa/2')))
+            for obj in ds.objects(subj, PROV.wasAttributedTo, unique=True):
+                ds.remove((subj, PROV.wasAttributedTo, obj, g_uri))
+            ds.add((subj, PROV.wasAttributedTo, URIRef('https://w3id.org/oc/meta/prov/pa/2'), g_uri))
     
 
     def build_update_query(to_fix:List[Tuple[URIRef]]):
@@ -454,18 +476,18 @@ class MultiObjectFixerFile:
     def fix_local_graph(ds:Dataset, graph:Graph, to_fix:tuple, meta_dumps) -> None:
 
         creation_se_uri = URIRef(graph.identifier + 'se/1')
-        genTime = to_fix[1]
-        primSource_str = get_previous_meta_dump_uri(meta_dumps, str(genTime))
-        primSource_literal = Literal(primSource_str)
+        genTime_str = to_fix[1]
+        primSource_str = get_previous_meta_dump_uri(meta_dumps, genTime_str)
+        # primSource_literal = Literal(primSource_str)
         referent = URIRef(get_described_res_omid(str(creation_se_uri)))
         desc = Literal(f"The entity '{str(referent)}' has been created.")
         triples_to_add = (
-            (creation_se_uri, PROV.hadPrimarySource, primSource_literal),
+            (creation_se_uri, PROV.hadPrimarySource, URIRef(primSource_str)),
             (creation_se_uri, PROV.wasAttributedTo, URIRef('https://w3id.org/oc/meta/prov/pa/1')),
             (creation_se_uri, PROV.specializationOf, referent),
             (creation_se_uri, DCTERMS.description, desc),
             (creation_se_uri, RDF.type, PROV.Entity),
-            (creation_se_uri, PROV.generatedAtTime, genTime)
+            (creation_se_uri, PROV.generatedAtTime, Literal(genTime_str, datatype=XSD.dateTime))
         )
 
         ds.remove((None, None, None, graph.identifier))
@@ -595,15 +617,9 @@ def process(
 
     rename_mapping = FillerFixerFile.make_global_rename_map(filler_issues)
     graphs_with_fillers = {t[0]:t[1] for t in filler_issues}  # {<URIRef>: {"to_delete":[...], "remaining_snapshots":[...]}}
-    meta_dumps = meta_dumps_register # TODO: forse funzione per normalizzare meta_dumps_register?
-
+    meta_dumps = sorted([(date.fromisoformat(d), url) for d, url in meta_dumps_register], key=lambda x: x[0])  # TODO: validate and normalise meta_dumps
 
     for file_data, fp in tqdm(read_rdf_dump(data_dir, whole_file=True, include_fp=True), total=tot_files):
-
-        fixed_fp = os.path.join(out_dir, str(Path(fp).parent)) + '.json'  # destination file of corrected dataset
-        os.makedirs(fixed_fp, exist_ok=True)
-        if os.path.isfile(fixed_fp) and not overwrite:
-            raise FileExistsError(f"The file {fixed_fp} already exists. To overwrite it, set the 'overwrite' parameter to True.")
         
         stringified_data = json.dumps(file_data)
         d = Dataset(default_union=True)
@@ -615,41 +631,18 @@ def process(
         multi_pa_issues_in_file = [] # Issues for MultiPAFixer in current file
         multi_obj_issues_in_file = [] # Issues for MultiObjectFixer in current file
 
-        # FillerFixer rinomina gli snapshot, quindi fai in modo che gli step successivi leggano il grafo eventualmente modificato
-        for graph in d.graphs():
 
-            # ------ FillerFixer ------
+        # ------ FillerFixer ------
+        for graph in d.graphs():
+            if graph.identifier == d.default_graph.identifier:  # skip default graph
+                continue 
+
             ff_to_fix_val = graphs_with_fillers.get(graph.identifier)
             if ff_to_fix_val:
                 ff_issues_in_file.append((graph.identifier, ff_to_fix_val))
-                FillerFixerFile.fix_local_graph(d, graph, rename_mapping)
-                            
-        for graph in d.graphs():
-            # ------ DateTimeFixer ------
-            local_dt_issues = DateTimeFixerFile.detect(graph)
-            if local_dt_issues is not None:
-                dt_issues_in_file.append(local_dt_issues)
-                DateTimeFixerFile.fix_local_graph(d, graph, local_dt_issues)
+                FillerFixerFile.fix_local_graph(d, graph, rename_mapping, graphs_with_fillers)
 
-            # ------ MissingPrimSourceFixer ------
-            local_no_source_issues = MissingPrimSourceFixerFile.detect(graph)
-            if local_no_source_issues is not None:
-                mps_issues_in_file.append(local_no_source_issues)
-                MissingPrimSourceFixerFile.fix_local_graph(d, graph, local_no_source_issues, meta_dumps)
-            
-            # ------ MultiPAFixer ------
-            local_multi_pa_issues = MultiPAFixerFile.detect(graph)
-            if local_multi_pa_issues is not None:
-                multi_pa_issues_in_file.extend(local_multi_pa_issues)
-                MultiPAFixerFile.fix_local_graph(d, graph, local_multi_pa_issues)
-
-            # ------ MultiObjectFixer ------
-            local_multi_object_issues = MultiObjectFixerFile.detect(graph)
-            if local_multi_object_issues is not None:
-                multi_obj_issues_in_file.append(local_multi_object_issues)
-                MultiObjectFixerFile.fix_local_graph(d, graph, local_multi_object_issues, meta_dumps)
-        
-        # Fix triplestore 
+        # Now execute FillerFixer SPARQL updates on the endpoint (delete/rename/adapt)
         for idx, chunk in enumerate(batched(ff_issues_in_file, chunk_size)):
             for t in chunk: # queries for FillerFixer are executed per-graph
                 g_id = str(t[0])
@@ -658,7 +651,7 @@ def process(
                 local_mapping = FillerFixerFile.map_se_names(to_delete, to_rename)
                 newest_names = list(set(local_mapping.values()))
 
-                del_q = FillerFixerFile.build_delete_sparql_query(to_delete)
+                del_q = FillerFixerFile.build_delete_sparql_query(t)
                 sparql_update(client, del_q, failed_queries_log)  # send deletion query
                 rename_q = FillerFixerFile.build_rename_sparql_query(local_mapping)
                 sparql_update(client, rename_q, failed_queries_log)  # send query for renaming the rest of the snapshots
@@ -666,25 +659,71 @@ def process(
                 adapt_dt_q = FillerFixerFile.build_adapt_invaltime_sparql_query(g_id, newest_names)
                 sparql_update(client, adapt_dt_q, failed_queries_log)  # send query for adapting invalidatedAtTime relations among remaining snapshots
 
-        # N.B.: the steps below are strictly ordered
+        # ------ DateTimeFixer ------                    
+        for graph in d.graphs():
+            if graph.identifier == d.default_graph.identifier:  # skip default graph
+                continue 
+
+            local_dt_issues = DateTimeFixerFile.detect(graph)
+            if local_dt_issues:
+                dt_issues_in_file.extend(local_dt_issues)
+                DateTimeFixerFile.fix_local_graph(d, graph, local_dt_issues)
+
+
         for idx, chunk in enumerate(batched(dt_issues_in_file, chunk_size)):
             q = DateTimeFixerFile.build_update_query(chunk)
             sparql_update(client, q, failed_queries_log) 
-        
+
+
+        # ------ MissingPrimSourceFixer ------
+        for graph in d.graphs():
+            if graph.identifier == d.default_graph.identifier:  # skip default graph
+                continue 
+            local_no_source_issues = MissingPrimSourceFixerFile.detect(graph)
+            if local_no_source_issues:
+                mps_issues_in_file.append(local_no_source_issues)
+                MissingPrimSourceFixerFile.fix_local_graph(d, graph, local_no_source_issues, meta_dumps)
+
         for idx, chunk in enumerate(batched(mps_issues_in_file, chunk_size)):
             q = MissingPrimSourceFixerFile.build_update_query(chunk, meta_dumps)
             sparql_update(client, q, failed_queries_log) 
+           
+        # ------ MultiPAFixer ------
+        for graph in d.graphs():
+            if graph.identifier == d.default_graph.identifier:  # skip default graph
+                continue 
+            local_multi_pa_issues = MultiPAFixerFile.detect(graph)
+            if local_multi_pa_issues:
+                multi_pa_issues_in_file.extend(local_multi_pa_issues)
+                MultiPAFixerFile.fix_local_graph(d, graph, local_multi_pa_issues)
 
-        for idx, chunk in enumerate(batched(multi_pa_issues_in_file)):
+        for idx, chunk in enumerate(batched(multi_pa_issues_in_file, chunk_size)):
             q = MultiPAFixerFile.build_update_query(chunk)
             sparql_update(client, q, failed_queries_log) 
 
-        for idx, chunk, in enumerate(batched(multi_obj_issues_in_file)):
+        # ------ MultiObjectFixer ------
+        for graph in d.graphs():
+            if graph.identifier == d.default_graph.identifier:  # skip default graph
+                continue 
+            local_multi_object_issues = MultiObjectFixerFile.detect(graph)
+            if local_multi_object_issues:
+                multi_obj_issues_in_file.append(local_multi_object_issues)
+                MultiObjectFixerFile.fix_local_graph(d, graph, local_multi_object_issues, meta_dumps)
+
+        for idx, chunk, in enumerate(batched(multi_obj_issues_in_file, chunk_size)):
             q = MultiObjectFixerFile.build_update_query(chunk, meta_dumps)
             sparql_update(client, q, failed_queries_log)
+
+       # ------ Save corrected dataset to file 
+
+        fixed_location = os.path.join(out_dir, str(Path(fp).parent))
+        os.makedirs(fixed_location, exist_ok=True)
+        fixed_fp = os.path.join(fixed_location, Path(fp).name)  # destination file of corrected dataset
+        if os.path.isfile(fixed_fp) and not overwrite:
+            raise FileExistsError(f"The file {fixed_fp} already exists. To overwrite it, set the 'overwrite' parameter to True.")
         
         # Save corrected dataset to file
-        out_data = d.serialize(format='json-ld')
+        out_data = d.serialize(format='json-ld', indent=None)
         with open(fixed_fp, 'w', encoding='utf-8') as out_file:
             out_file.write(out_data)
         

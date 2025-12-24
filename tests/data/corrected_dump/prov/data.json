@@ -1,0 +1,527 @@
+[
+  {
+    "@graph": [
+      {
+        "@id": "https://w3id.org/oc/meta/br/0610491907/prov/se/1",
+        "@type": [
+          "http://www.w3.org/ns/prov#Entity"
+        ],
+        "http://purl.org/dc/terms/description": [
+          {
+            "@value": "The entity 'https://w3id.org/oc/meta/br/0610491907' has been created."
+          }
+        ],
+        "http://www.w3.org/ns/prov#generatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2023-12-13T13:56:13+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#invalidatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2024-01-19T13:37:12+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#specializationOf": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/0610491907"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasAttributedTo": [
+          {
+            "@id": "https://w3id.org/oc/meta/prov/pa/1"
+          }
+        ],
+        "http://www.w3.org/ns/prov#hadPrimarySource": [
+          {
+            "@id": "https://doi.org/10.6084/m9.figshare.21747536.v5"
+          }
+        ]
+      },
+      {
+        "@id": "https://w3id.org/oc/meta/br/0610491907/prov/se/2",
+        "@type": [
+          "http://www.w3.org/ns/prov#Entity"
+        ],
+        "http://purl.org/dc/terms/description": [
+          {
+            "@value": "The entity 'https://w3id.org/oc/meta/br/0610491907' has been deleted."
+          }
+        ],
+        "http://www.w3.org/ns/prov#generatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2024-01-19T13:37:12+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#invalidatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2024-01-19T13:37:12+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#specializationOf": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/0610491907"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasAttributedTo": [
+          {
+            "@id": "https://w3id.org/oc/meta/prov/pa/1"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasDerivedFrom": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/0610491907/prov/se/1"
+          }
+        ],
+        "https://w3id.org/oc/ontology/hasUpdateQuery": [
+          {
+            "@value": "DELETE DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/06403981806> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891817> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891807> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891821> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/vocab/frbr/core#partOf> <https://w3id.org/oc/meta/br/0619014835> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891820> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891808> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/0610548108> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/dc/terms/title> \"Measurement And Laser Control Of Attosecond Charge Migration In Ionized Iodoacetylene\" .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/vocab/frbr/core#embodiment> <https://w3id.org/oc/meta/re/0610335917> .<https://w3id.org/oc/meta/br/0610491907> <http://prismstandard.org/namespaces/basic/2.0/publicationDate> \"2015-11-13\" .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891811> .<https://w3id.org/oc/meta/br/0610491907> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://purl.org/spar/fabio/JournalArticle> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891816> .<https://w3id.org/oc/meta/br/0610491907> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://purl.org/spar/fabio/Expression> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891809> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891819> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891815> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891812> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891813> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891818> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891810> .<https://w3id.org/oc/meta/br/0610491907> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/06101891814> . } }"
+          }
+        ]
+      }
+    ],
+    "@id": "https://w3id.org/oc/meta/br/0610491907/prov/"
+  },
+  {
+    "@graph": [
+      {
+        "@id": "https://w3id.org/oc/meta/br/06101234191/prov/se/1",
+        "@type": [
+          "http://www.w3.org/ns/prov#Entity"
+        ],
+        "http://purl.org/dc/terms/description": [
+          {
+            "@value": "The entity 'https://w3id.org/oc/meta/br/06101234191' has been created."
+          }
+        ],
+        "http://www.w3.org/ns/prov#generatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2023-12-13T13:56:09+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#invalidatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2024-01-01T18:53:45+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#specializationOf": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06101234191"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasAttributedTo": [
+          {
+            "@id": "https://w3id.org/oc/meta/prov/pa/1"
+          }
+        ],
+        "http://www.w3.org/ns/prov#hadPrimarySource": [
+          {
+            "@id": "https://doi.org/10.6084/m9.figshare.21747536.v5"
+          }
+        ]
+      },
+      {
+        "@id": "https://w3id.org/oc/meta/br/06101234191/prov/se/3",
+        "@type": [
+          "http://www.w3.org/ns/prov#Entity"
+        ],
+        "http://purl.org/dc/terms/description": [
+          {
+            "@value": "The entity 'https://w3id.org/oc/meta/br/06101234191' has been merged with 'https://w3id.org/oc/meta/br/062203612593'."
+          }
+        ],
+        "http://www.w3.org/ns/prov#generatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2024-12-06T01:38:20+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#specializationOf": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06101234191"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasAttributedTo": [
+          {
+            "@id": "https://orcid.org/0000-0002-8420-0696"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasDerivedFrom": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06101234191/prov/se/2"
+          },
+          {
+            "@id": "https://w3id.org/oc/meta/br/062203612593/prov/se/1"
+          }
+        ],
+        "https://w3id.org/oc/ontology/hasUpdateQuery": [
+          {
+            "@value": "DELETE DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06101234191> <http://prismstandard.org/namespaces/basic/2.0/publicationDate> \"1985-06\" .<https://w3id.org/oc/meta/br/06101234191> <http://purl.org/dc/terms/title> \"Diagnostic And Gender Differences In The Expressed Fears Of Anxious Patients\" .<https://w3id.org/oc/meta/br/06101234191> <http://purl.org/vocab/frbr/core#partOf> <https://w3id.org/oc/meta/br/0618028810> . } }; INSERT DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06101234191> <http://purl.org/dc/terms/title> \"Diagnostic And Gender Differences In The Expressed Fears Of Anxious Patients.\"^^<http://www.w3.org/2001/XMLSchema#string> .<https://w3id.org/oc/meta/br/06101234191> <http://purl.org/vocab/frbr/core#partOf> <https://w3id.org/oc/meta/br/0618029920> .<https://w3id.org/oc/meta/br/06101234191> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/062203406463> .<https://w3id.org/oc/meta/br/06101234191> <http://prismstandard.org/namespaces/basic/2.0/publicationDate> \"1985\"^^<http://www.w3.org/2001/XMLSchema#gYear> . } }"
+          }
+        ]
+      },
+      {
+        "@id": "https://w3id.org/oc/meta/br/06101234191/prov/se/2",
+        "@type": [
+          "http://www.w3.org/ns/prov#Entity"
+        ],
+        "http://purl.org/dc/terms/description": [
+          {
+            "@value": "The entity 'https://w3id.org/oc/meta/br/06101234191' has been modified."
+          }
+        ],
+        "http://www.w3.org/ns/prov#generatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2024-01-01T18:53:45+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#invalidatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2024-12-06T01:38:20+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#specializationOf": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06101234191"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasAttributedTo": [
+          {
+            "@id": "https://w3id.org/oc/meta/prov/pa/1"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasDerivedFrom": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06101234191/prov/se/1"
+          }
+        ],
+        "https://w3id.org/oc/ontology/hasUpdateQuery": [
+          {
+            "@value": "DELETE DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06101234191> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/06101266921> . } }; INSERT DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06101234191> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/062203406464> . } }"
+          }
+        ]
+      }
+    ],
+    "@id": "https://w3id.org/oc/meta/br/06101234191/prov/"
+  },
+  {
+    "@graph": [
+      {
+        "@id": "https://w3id.org/oc/meta/br/06104437957/prov/se/1",
+        "@type": [
+          "http://www.w3.org/ns/prov#Entity"
+        ],
+        "http://purl.org/dc/terms/description": [
+          {
+            "@value": "The entity 'https://w3id.org/oc/meta/br/06104437957' has been created."
+          }
+        ],
+        "http://www.w3.org/ns/prov#generatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2023-12-13T13:56:16+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#hadPrimarySource": [
+          {
+            "@id": "https://doi.org/10.6084/m9.figshare.21747536.v5"
+          }
+        ],
+        "http://www.w3.org/ns/prov#specializationOf": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06104437957"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasAttributedTo": [
+          {
+            "@id": "https://w3id.org/oc/meta/prov/pa/1"
+          }
+        ]
+      }
+    ],
+    "@id": "https://w3id.org/oc/meta/br/06104437957/prov/"
+  },
+  {
+    "@graph": [
+      {
+        "@id": "https://w3id.org/oc/meta/br/06101188873/prov/se/1",
+        "@type": [
+          "http://www.w3.org/ns/prov#Entity"
+        ],
+        "http://purl.org/dc/terms/description": [
+          {
+            "@value": "The entity 'https://w3id.org/oc/meta/br/06101188873' has been created."
+          }
+        ],
+        "http://www.w3.org/ns/prov#generatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2023-12-13T13:56:05+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#hadPrimarySource": [
+          {
+            "@id": "https://openalex.s3.amazonaws.com/browse.html"
+          }
+        ],
+        "http://www.w3.org/ns/prov#specializationOf": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06101188873"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasAttributedTo": [
+          {
+            "@id": "https://w3id.org/oc/meta/prov/pa/1"
+          }
+        ]
+      }
+    ],
+    "@id": "https://w3id.org/oc/meta/br/06101188873/prov/"
+  },
+  {
+    "@graph": [
+      {
+        "@id": "https://w3id.org/oc/meta/br/06103051181/prov/se/2",
+        "@type": [
+          "http://www.w3.org/ns/prov#Entity"
+        ],
+        "http://purl.org/dc/terms/description": [
+          {
+            "@value": "The entity 'https://w3id.org/oc/meta/br/06103051181' has been modified."
+          }
+        ],
+        "http://www.w3.org/ns/prov#generatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2024-03-27T17:16:04+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#hadPrimarySource": [
+          {
+            "@id": "https://openalex.s3.amazonaws.com/browse.html"
+          }
+        ],
+        "http://www.w3.org/ns/prov#specializationOf": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06103051181"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasAttributedTo": [
+          {
+            "@id": "https://w3id.org/oc/meta/prov/pa/1"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasDerivedFrom": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06103051181/prov/se/1"
+          }
+        ],
+        "https://w3id.org/oc/ontology/hasUpdateQuery": [
+          {
+            "@value": "INSERT DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06103051181> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/06510478257> . } }"
+          }
+        ]
+      },
+      {
+        "@id": "https://w3id.org/oc/meta/br/06103051181/prov/se/1",
+        "@type": [
+          "http://www.w3.org/ns/prov#Entity"
+        ],
+        "http://purl.org/dc/terms/description": [
+          {
+            "@value": "The entity 'https://w3id.org/oc/meta/br/06103051181' has been created."
+          }
+        ],
+        "http://www.w3.org/ns/prov#generatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2023-12-13T13:56:02+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#invalidatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2024-03-27T17:16:04+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#specializationOf": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06103051181"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasAttributedTo": [
+          {
+            "@id": "https://w3id.org/oc/meta/prov/pa/1"
+          }
+        ],
+        "http://www.w3.org/ns/prov#hadPrimarySource": [
+          {
+            "@id": "https://doi.org/10.6084/m9.figshare.21747536.v5"
+          }
+        ]
+      }
+    ],
+    "@id": "https://w3id.org/oc/meta/br/06103051181/prov/"
+  },
+  {
+    "@graph": [
+      {
+        "@id": "https://w3id.org/oc/meta/br/0610476324/prov/se/1",
+        "@type": [
+          "http://www.w3.org/ns/prov#Entity"
+        ],
+        "http://purl.org/dc/terms/description": [
+          {
+            "@value": "The entity 'https://w3id.org/oc/meta/br/0610476324' has been created."
+          }
+        ],
+        "http://www.w3.org/ns/prov#generatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2023-12-13T13:56:31+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#specializationOf": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/0610476324"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasAttributedTo": [
+          {
+            "@id": "https://w3id.org/oc/meta/prov/pa/1"
+          }
+        ],
+        "http://www.w3.org/ns/prov#hadPrimarySource": [
+          {
+            "@id": "https://doi.org/10.6084/m9.figshare.21747536.v5"
+          }
+        ]
+      }
+    ],
+    "@id": "https://w3id.org/oc/meta/br/0610476324/prov/"
+  },
+  {
+    "@graph": [
+      {
+        "@id": "https://w3id.org/oc/meta/br/06104437954/prov/se/1",
+        "@type": [
+          "http://www.w3.org/ns/prov#Entity"
+        ],
+        "http://purl.org/dc/terms/description": [
+          {
+            "@value": "The entity 'https://w3id.org/oc/meta/br/06104437954' has been created."
+          }
+        ],
+        "http://www.w3.org/ns/prov#generatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2023-12-13T13:56:16+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#hadPrimarySource": [
+          {
+            "@id": "https://doi.org/10.6084/m9.figshare.21747536.v5"
+          }
+        ],
+        "http://www.w3.org/ns/prov#specializationOf": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06104437954"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasAttributedTo": [
+          {
+            "@id": "https://w3id.org/oc/meta/prov/pa/1"
+          }
+        ]
+      }
+    ],
+    "@id": "https://w3id.org/oc/meta/br/06104437954/prov/"
+  },
+  {
+    "@graph": [
+      {
+        "@id": "https://w3id.org/oc/meta/br/06104278913/prov/se/1",
+        "@type": [
+          "http://www.w3.org/ns/prov#Entity"
+        ],
+        "http://purl.org/dc/terms/description": [
+          {
+            "@value": "The entity 'https://w3id.org/oc/meta/br/06104278913' has been created."
+          }
+        ],
+        "http://www.w3.org/ns/prov#generatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2023-12-13T13:56:02+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#invalidatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2024-01-19T14:58:09+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#specializationOf": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06104278913"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasAttributedTo": [
+          {
+            "@id": "https://w3id.org/oc/meta/prov/pa/2"
+          }
+        ],
+        "http://www.w3.org/ns/prov#hadPrimarySource": [
+          {
+            "@id": "https://doi.org/10.6084/m9.figshare.21747536.v5"
+          }
+        ]
+      },
+      {
+        "@id": "https://w3id.org/oc/meta/br/06104278913/prov/se/2",
+        "@type": [
+          "http://www.w3.org/ns/prov#Entity"
+        ],
+        "http://purl.org/dc/terms/description": [
+          {
+            "@value": "The entity 'https://w3id.org/oc/meta/br/06104278913' has been modified."
+          }
+        ],
+        "http://www.w3.org/ns/prov#generatedAtTime": [
+          {
+            "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            "@value": "2024-01-19T14:58:09+00:00"
+          }
+        ],
+        "http://www.w3.org/ns/prov#specializationOf": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06104278913"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasAttributedTo": [
+          {
+            "@id": "https://w3id.org/oc/meta/prov/pa/1"
+          }
+        ],
+        "http://www.w3.org/ns/prov#wasDerivedFrom": [
+          {
+            "@id": "https://w3id.org/oc/meta/br/06104278913/prov/se/1"
+          }
+        ],
+        "https://w3id.org/oc/ontology/hasUpdateQuery": [
+          {
+            "@value": "DELETE DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06104278913> <http://prismstandard.org/namespaces/basic/2.0/publicationDate> \"2010-08-24\" .<https://w3id.org/oc/meta/br/06104278913> <http://purl.org/dc/terms/title> \"Initiating Patients On Antiretroviral Therapy At CD4 Cell Counts Above 200 Cells/Μl Is Associated With Improved Treatment Outcomes In South Africa\" . } }; INSERT DATA { GRAPH <https://w3id.org/oc/meta/br/> { <https://w3id.org/oc/meta/br/06104278913> <http://prismstandard.org/namespaces/basic/2.0/publicationDate> \"2010-08-24\"^^<http://www.w3.org/2001/XMLSchema#date> .<https://w3id.org/oc/meta/br/06104278913> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/0617011957842> .<https://w3id.org/oc/meta/br/06104278913> <http://purl.org/spar/datacite/hasIdentifier> <https://w3id.org/oc/meta/id/061702767608> .<https://w3id.org/oc/meta/br/06104278913> <http://purl.org/spar/pro/isDocumentContextFor> <https://w3id.org/oc/meta/ar/0617011957841> .<https://w3id.org/oc/meta/br/06104278913> <http://purl.org/vocab/frbr/core#embodiment> <https://w3id.org/oc/meta/re/061702236961> .<https://w3id.org/oc/meta/br/06104278913> <http://purl.org/dc/terms/title> \"Early Commencement Of Antiretroviral Therapy In HIV Patients From Resource-Limited Countries May Prevent The Hazards Of Severe Immunodeficiency\" . } }"
+          }
+        ]
+      }
+    ],
+    "@id": "https://w3id.org/oc/meta/br/06104278913/prov/"
+  }
+]
