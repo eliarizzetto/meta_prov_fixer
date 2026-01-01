@@ -17,6 +17,7 @@ from meta_prov_fixer.src import process, FillerFixerFile, DateTimeFixerFile, Mis
 from meta_prov_fixer.utils import get_rdf_prov_filepaths
 import meta_prov_fixer.src
 from pprint import pprint
+import shutil
 
 
 meta_dumps_pub_dates = [
@@ -116,9 +117,9 @@ class TestProcessOnFile(BaseTestCase):
                 os.remove(f)
             except Exception:
                 pass
-        for f in glob.glob(os.path.join(OUT_DIR, '*')):
+        for sub in glob.glob(os.path.join(OUT_DIR, '*')):
             try:
-                os.remove(f)
+                shutil.rmtree(sub)
             except Exception:
                 pass
     
@@ -143,7 +144,9 @@ class TestProcessOnFile(BaseTestCase):
             out_dir=OUT_DIR,
             failed_queries_fp="tests/data/fix_process_log/failed_queries",
             chunk_size=100,
-            overwrite=True
+            resume=False,
+            checkpoint_fp="test_fix_prov.checkpoint.json",
+            cache_fp="test_filler_issues.cache.json"
         )
 
         # --------- Check fixes ON (simulated) TRIPLESTORE ------------

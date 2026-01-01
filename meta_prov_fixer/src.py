@@ -8,11 +8,144 @@ from string import Template
 import re
 import json
 from tqdm import tqdm
+# from tqdm.auto import tqdm
 from sparqlite import SPARQLClient, QueryError, EndpointError
 from typing import TextIO
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import os
 from pathlib import Path
+import logging
+import traceback
+import time
+
+from enum import IntEnum
+
+class Step(IntEnum):
+    START = 0
+    FILLER = 1
+    DATETIME = 2
+    MISSING_PS = 3
+    MULTI_PA = 4
+    MULTI_OBJECT = 5
+    WRITE_FILE = 6
+    # DONE = 7
+
+
+class Checkpoint:
+    def __init__(self, path: str):
+        self.path = path
+        self.state = None
+        self.load()
+
+    def load(self):
+        if os.path.exists(self.path):
+            with open(self.path, "r", encoding="utf-8") as f:
+                self.state = json.load(f)
+        else:
+            self.state = None
+
+    def _atomic_write(self, data: dict, retries=5, delay=0.05):
+        tmp_path = self.path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        # os.replace(tmp_path, self.path)
+        for i in range(retries):
+            try:
+                os.replace(tmp_path, self.path)
+                return
+            
+            #  catch PermissionError: [WinError 5] Accesso negato: 'fix_prov.checkpoint.json.tmp' -> 'fix_prov.checkpoint.json'
+            except PermissionError:
+                time.sleep(delay)
+
+        raise PermissionError(f"Failed to replace checkpoint file after {retries} retries")
+
+    def save(
+        self,
+        file_index: int,
+        file_path: str,
+        step: Step,
+        endpoint_done: bool,
+        local_done: bool
+    ):
+        self.state = {
+            "file_index": file_index,
+            "file_path": file_path,
+            "step": step.name,
+            "endpoint_done": endpoint_done,
+            "local_done": local_done,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        self._atomic_write(self.state)
+
+    def should_skip_file(self, idx: int) -> bool:
+        return self.state and idx < self.state["file_index"]
+
+    def step_completed(self, step: Step, file_index:int) -> bool:
+        if not self.state:
+            return False
+        return bool((Step[self.state["step"]] >= step) and self.state["file_index"] >= file_index)
+
+    def endpoint_completed(self) -> bool:
+        return self.state and self.state.get("endpoint_done", False)
+
+    def local_completed(self) -> bool:
+        return self.state and self.state.get("local_done", False)
+
+
+# --- Caching mechanism for filler issues detection --- #
+
+def _atomic_json_write(path: str, data: dict):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
+
+def load_or_prepare_filler_issues(data_dir: str, cache_fp: str="filler_issues.cache.json"):
+
+    if os.path.exists(cache_fp):
+        with open(cache_fp, "r", encoding="utf-8") as f:
+            cached = json.load(f)
+
+        if cached.get("data_dir") == os.path.abspath(data_dir):
+            filler_issues = [
+                (URIRef(g), {
+                    "to_delete": [URIRef(u) for u in v["to_delete"]],
+                    "remaining_snapshots": [URIRef(u) for u in v["remaining_snapshots"]],
+                })
+                for g, v in cached["filler_issues"]
+            ]
+            return filler_issues, cached["tot_files"], cache_fp
+
+        # data_dir mismatch -> invalidate cache
+        os.remove(cache_fp)
+
+    # Cache miss -> compute
+    filler_issues, tot_files = prepare_filler_issues(data_dir)
+
+    serializable = [
+        (
+            str(g),
+            {
+                "to_delete": [str(u) for u in d["to_delete"]],
+                "remaining_snapshots": [str(u) for u in d["remaining_snapshots"]],
+            }
+        )
+        for g, d in filler_issues
+    ]
+
+    payload = {
+        "data_dir": os.path.abspath(data_dir),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "tot_files": tot_files,
+        "filler_issues": serializable,
+    }
+
+    _atomic_json_write(cache_fp, payload)
+
+    return filler_issues, tot_files, cache_fp
+
 
 
 class FillerFixerFile:
@@ -573,7 +706,7 @@ def prepare_filler_issues(data_dir)->Tuple[List[tuple], int]:
 def sparql_update(
     client: SPARQLClient,
     update_query: str,
-    failed_log: TextIO,
+    failed_log_fp: str,
 ) -> bool:
     """
     Execute a SPARQL UPDATE via client.update().
@@ -590,149 +723,347 @@ def sparql_update(
 
     except (QueryError, EndpointError) as exc:
         # log both syntax errors and endpoint errors that weren't recoverable
-        failed_log.write(update_query.replace("\n", "\\n") + "\n")
-        failed_log.write(f"# Failure: {type(exc).__name__}: {exc}\n\n")
-        failed_log.flush()
+        with open(failed_log_fp, 'a', encoding='utf-8') as lf:
+            lf.write(update_query.replace("\n", "\\n") + "\n")
+            lf.write(f"# Failure: {type(exc).__name__}: {exc}\n\n")
+            lf.flush()
         return False
 
 
 
+# def process(
+#         endpoint, 
+#         data_dir, 
+#         meta_dumps_register, 
+#         out_dir,
+#         chunk_size=100, 
+#         failed_queries_fp=f"prov_fix_failed_queries_{datetime.today().strftime('%Y-%m-%d')}.txt",
+#         overwrite = False
+#     ):
+
+#     os.makedirs(out_dir, exist_ok=True)
+
+#     client = SPARQLClient(endpoint)
+#     failed_queries_log = open(failed_queries_fp, 'a', encoding='utf-8')
+
+#     filler_issues, tot_files = prepare_filler_issues(data_dir)  
+#     # TODO: meccanismo per salvare filler_issues su file e controllarne la presenza in base al file
+
+#     rename_mapping = FillerFixerFile.make_global_rename_map(filler_issues)
+#     graphs_with_fillers = {t[0]:t[1] for t in filler_issues}  # {<URIRef>: {"to_delete":[...], "remaining_snapshots":[...]}}
+#     meta_dumps = sorted([(date.fromisoformat(d), url) for d, url in meta_dumps_register], key=lambda x: x[0])  # TODO: validate and normalise meta_dumps
+
+#     for file_data, fp in tqdm(read_rdf_dump(data_dir, whole_file=True, include_fp=True), total=tot_files):
+        
+#         stringified_data = json.dumps(file_data)
+#         d = Dataset(default_union=True)
+#         d.parse(data=stringified_data, format='json-ld')
+
+#         ff_issues_in_file = [] # Issues for FillerFixer in current file
+#         dt_issues_in_file = [] # Issues for DateTimeFixer in current file
+#         mps_issues_in_file = [] # Issues for MissingPrimSourceFixer in current file
+#         multi_pa_issues_in_file = [] # Issues for MultiPAFixer in current file
+#         multi_obj_issues_in_file = [] # Issues for MultiObjectFixer in current file
+
+
+#         # ------ FillerFixer ------
+#         for graph in d.graphs():
+#             if graph.identifier == d.default_graph.identifier:  # skip default graph
+#                 continue 
+
+#             ff_to_fix_val = graphs_with_fillers.get(graph.identifier)
+#             if ff_to_fix_val:
+#                 ff_issues_in_file.append((graph.identifier, ff_to_fix_val))
+#                 FillerFixerFile.fix_local_graph(d, graph, rename_mapping, graphs_with_fillers)
+
+#         # Now execute FillerFixer SPARQL updates on the endpoint (delete/rename/adapt)
+#         for idx, chunk in enumerate(batched(ff_issues_in_file, chunk_size)):
+#             for t in chunk: # queries for FillerFixer are executed per-graph
+#                 g_id = str(t[0])
+#                 to_delete = [str(i) for i in t[1]['to_delete']]
+#                 to_rename = [str(i) for i in t[1]['remaining_snapshots']]
+#                 local_mapping = FillerFixerFile.map_se_names(to_delete, to_rename)
+#                 newest_names = list(set(local_mapping.values()))
+
+#                 del_q = FillerFixerFile.build_delete_sparql_query(t)
+#                 sparql_update(client, del_q, failed_queries_log)  # send deletion query
+#                 rename_q = FillerFixerFile.build_rename_sparql_query(local_mapping)
+#                 sparql_update(client, rename_q, failed_queries_log)  # send query for renaming the rest of the snapshots
+
+#                 adapt_dt_q = FillerFixerFile.build_adapt_invaltime_sparql_query(g_id, newest_names)
+#                 sparql_update(client, adapt_dt_q, failed_queries_log)  # send query for adapting invalidatedAtTime relations among remaining snapshots
+
+#         # ------ DateTimeFixer ------                    
+#         for graph in d.graphs():
+#             if graph.identifier == d.default_graph.identifier:  # skip default graph
+#                 continue 
+
+#             local_dt_issues = DateTimeFixerFile.detect(graph)
+#             if local_dt_issues:
+#                 dt_issues_in_file.extend(local_dt_issues)
+#                 DateTimeFixerFile.fix_local_graph(d, graph, local_dt_issues)
+
+
+#         for idx, chunk in enumerate(batched(dt_issues_in_file, chunk_size)):
+#             q = DateTimeFixerFile.build_update_query(chunk)
+#             sparql_update(client, q, failed_queries_log) 
+
+
+#         # ------ MissingPrimSourceFixer ------
+#         for graph in d.graphs():
+#             if graph.identifier == d.default_graph.identifier:  # skip default graph
+#                 continue 
+#             local_no_source_issues = MissingPrimSourceFixerFile.detect(graph)
+#             if local_no_source_issues:
+#                 mps_issues_in_file.append(local_no_source_issues)
+#                 MissingPrimSourceFixerFile.fix_local_graph(d, graph, local_no_source_issues, meta_dumps)
+
+#         for idx, chunk in enumerate(batched(mps_issues_in_file, chunk_size)):
+#             q = MissingPrimSourceFixerFile.build_update_query(chunk, meta_dumps)
+#             sparql_update(client, q, failed_queries_log) 
+           
+#         # ------ MultiPAFixer ------
+#         for graph in d.graphs():
+#             if graph.identifier == d.default_graph.identifier:  # skip default graph
+#                 continue 
+#             local_multi_pa_issues = MultiPAFixerFile.detect(graph)
+#             if local_multi_pa_issues:
+#                 multi_pa_issues_in_file.extend(local_multi_pa_issues)
+#                 MultiPAFixerFile.fix_local_graph(d, graph, local_multi_pa_issues)
+
+#         for idx, chunk in enumerate(batched(multi_pa_issues_in_file, chunk_size)):
+#             q = MultiPAFixerFile.build_update_query(chunk)
+#             sparql_update(client, q, failed_queries_log) 
+
+#         # ------ MultiObjectFixer ------
+#         for graph in d.graphs():
+#             if graph.identifier == d.default_graph.identifier:  # skip default graph
+#                 continue 
+#             local_multi_object_issues = MultiObjectFixerFile.detect(graph)
+#             if local_multi_object_issues:
+#                 multi_obj_issues_in_file.append(local_multi_object_issues)
+#                 MultiObjectFixerFile.fix_local_graph(d, graph, local_multi_object_issues, meta_dumps)
+
+#         for idx, chunk, in enumerate(batched(multi_obj_issues_in_file, chunk_size)):
+#             q = MultiObjectFixerFile.build_update_query(chunk, meta_dumps)
+#             sparql_update(client, q, failed_queries_log)
+
+#        # ------ Save corrected dataset to file 
+
+#         fixed_location = os.path.join(out_dir, str(Path(fp).parent))
+#         os.makedirs(fixed_location, exist_ok=True)
+#         fixed_fp = os.path.join(fixed_location, Path(fp).name)  # destination file of corrected dataset
+#         if os.path.isfile(fixed_fp) and not overwrite:
+#             raise FileExistsError(f"The file {fixed_fp} already exists. To overwrite it, set the 'overwrite' parameter to True.")
+        
+#         # Save corrected dataset to file
+#         out_data = d.serialize(format='json-ld', indent=None)
+#         with open(fixed_fp, 'w', encoding='utf-8') as out_file:
+#             out_file.write(out_data)
+        
+    
+#     client.close() # close connection to SPARQL endpoint
+#     failed_queries_log.close() 
+
+
+
 def process(
-        endpoint, 
-        data_dir, 
-        meta_dumps_register, 
+        endpoint,
+        data_dir,
+        meta_dumps_register,
         out_dir,
-        chunk_size=100, 
+        chunk_size=100,
         failed_queries_fp=f"prov_fix_failed_queries_{datetime.today().strftime('%Y-%m-%d')}.txt",
-        overwrite = False
+        overwrite=False,
+        resume=True,
+        checkpoint_fp="fix_prov.checkpoint.json",
+        cache_fp="filler_issues.cache.json"
     ):
 
     os.makedirs(out_dir, exist_ok=True)
 
+    checkpoint = Checkpoint(checkpoint_fp)
     client = SPARQLClient(endpoint)
-    failed_queries_log = open(failed_queries_fp, 'a', encoding='utf-8')
 
-    filler_issues, tot_files = prepare_filler_issues(data_dir)  
-    # TODO: meccanismo per salvare filler_issues su file e controllarne la presenza in base al file
+    try:
+        logging.info("Provenance fixing process started.")
+        logging.info(f"Checkpoint state: {str(checkpoint.state)}")
+        logging.info("Detecting Filler issues (via cache or new scan)...")
+        filler_issues, tot_files, filler_cache_fp = load_or_prepare_filler_issues(data_dir, cache_fp) # check cache for filler issues or get them
+        rename_mapping = FillerFixerFile.make_global_rename_map(filler_issues)
+        graphs_with_fillers = {t[0]: t[1] for t in filler_issues}
 
-    rename_mapping = FillerFixerFile.make_global_rename_map(filler_issues)
-    graphs_with_fillers = {t[0]:t[1] for t in filler_issues}  # {<URIRef>: {"to_delete":[...], "remaining_snapshots":[...]}}
-    meta_dumps = sorted([(date.fromisoformat(d), url) for d, url in meta_dumps_register], key=lambda x: x[0])  # TODO: validate and normalise meta_dumps
-
-    for file_data, fp in tqdm(read_rdf_dump(data_dir, whole_file=True, include_fp=True), total=tot_files):
+        meta_dumps = sorted(
+            [(date.fromisoformat(d), url) for d, url in meta_dumps_register],
+            key=lambda x: x[0]
+        )
         
-        stringified_data = json.dumps(file_data)
-        d = Dataset(default_union=True)
-        d.parse(data=stringified_data, format='json-ld')
+        logging.info("Processing RDF dump files...")
+        for file_index, (file_data, fp) in enumerate(
+                tqdm(
+                    read_rdf_dump(data_dir, whole_file=True, include_fp=True), 
+                    desc="Processing RDF dump files...",
+                    total=tot_files
+                )
+            ):
 
-        ff_issues_in_file = [] # Issues for FillerFixer in current file
-        dt_issues_in_file = [] # Issues for DateTimeFixer in current file
-        mps_issues_in_file = [] # Issues for MissingPrimSourceFixer in current file
-        multi_pa_issues_in_file = [] # Issues for MultiPAFixer in current file
-        multi_obj_issues_in_file = [] # Issues for MultiObjectFixer in current file
+            if resume and checkpoint.should_skip_file(file_index):
+                continue
+
+            stringified_data = json.dumps(file_data)
+            d = Dataset(default_union=True)
+            d.parse(data=stringified_data, format='json-ld')
+
+            # ---------------- FILLER FIXER ----------------
+            if not (resume and checkpoint.step_completed(Step.FILLER, file_index)):
+
+                ff_issues_in_file = []
+                for graph in d.graphs():
+                    if graph.identifier == d.default_graph.identifier:
+                        continue
+                    ff_to_fix_val = graphs_with_fillers.get(graph.identifier)
+                    if ff_to_fix_val:
+                        ff_issues_in_file.append((graph.identifier, ff_to_fix_val))
+                        FillerFixerFile.fix_local_graph(d, graph, rename_mapping, graphs_with_fillers)
+
+                for chunk in batched(ff_issues_in_file, chunk_size):
+                    for t in chunk:
+                        g_id = str(t[0])
+                        to_delete = [str(i) for i in t[1]['to_delete']]
+                        to_rename = [str(i) for i in t[1]['remaining_snapshots']]
+                        local_mapping = FillerFixerFile.map_se_names(to_delete, to_rename)
+                        newest_names = list(set(local_mapping.values()))
+
+                        sparql_update(client,
+                                    FillerFixerFile.build_delete_sparql_query(t),
+                                    failed_queries_fp)
+                        sparql_update(client,
+                                    FillerFixerFile.build_rename_sparql_query(local_mapping),
+                                    failed_queries_fp)
+                        sparql_update(client,
+                                    FillerFixerFile.build_adapt_invaltime_sparql_query(g_id, newest_names),
+                                    failed_queries_fp)
+
+                checkpoint.save(file_index, fp, Step.FILLER, endpoint_done=True, local_done=False)
+
+            # ---------------- DATETIME FIXER ----------------
+            if not (resume and checkpoint.step_completed(Step.DATETIME, file_index)):
+
+                dt_issues = []
+                for graph in d.graphs():
+                    if graph.identifier != d.default_graph.identifier:
+                        issues = DateTimeFixerFile.detect(graph)
+                        if issues:
+                            dt_issues.extend(issues)
+                            DateTimeFixerFile.fix_local_graph(d, graph, issues)
+
+                for chunk in batched(dt_issues, chunk_size):
+                    sparql_update(client,
+                                DateTimeFixerFile.build_update_query(chunk),
+                                failed_queries_fp)
+
+                checkpoint.save(file_index, fp, Step.DATETIME, endpoint_done=True, local_done=False)
+
+            # ---------------- MISSING PRIMARY SOURCE ----------------
+            if not (resume and checkpoint.step_completed(Step.MISSING_PS, file_index)):
+
+                mps_issues = []
+                for graph in d.graphs():
+                    if graph.identifier != d.default_graph.identifier:
+                        issue = MissingPrimSourceFixerFile.detect(graph)
+                        if issue:
+                            mps_issues.append(issue)
+                            MissingPrimSourceFixerFile.fix_local_graph(d, graph, issue, meta_dumps)
+
+                for chunk in batched(mps_issues, chunk_size):
+                    sparql_update(client,
+                                MissingPrimSourceFixerFile.build_update_query(chunk, meta_dumps),
+                                failed_queries_fp)
+
+                checkpoint.save(file_index, fp, Step.MISSING_PS, endpoint_done=True, local_done=False)
+
+            # ---------------- MULTI PA FIXER ----------------
+            if not (resume and checkpoint.step_completed(Step.MULTI_PA, file_index)):
+
+                pa_issues = []
+                for graph in d.graphs():
+                    if graph.identifier != d.default_graph.identifier:
+                        issues = MultiPAFixerFile.detect(graph)
+                        if issues:
+                            pa_issues.extend(issues)
+                            MultiPAFixerFile.fix_local_graph(d, graph, issues)
+
+                for chunk in batched(pa_issues, chunk_size):
+                    sparql_update(client,
+                                MultiPAFixerFile.build_update_query(chunk),
+                                failed_queries_fp)
+
+                checkpoint.save(file_index, fp, Step.MULTI_PA, endpoint_done=True, local_done=False)
+
+            # ---------------- MULTI OBJECT FIXER ----------------
+            if not (resume and checkpoint.step_completed(Step.MULTI_OBJECT, file_index)):
+
+                mo_issues = []
+                for graph in d.graphs():
+                    if graph.identifier != d.default_graph.identifier:
+                        issue = MultiObjectFixerFile.detect(graph)
+                        if issue:
+                            mo_issues.append(issue)
+                            MultiObjectFixerFile.fix_local_graph(d, graph, issue, meta_dumps)
+
+                for chunk in batched(mo_issues, chunk_size):
+                    sparql_update(client,
+                                MultiObjectFixerFile.build_update_query(chunk, meta_dumps),
+                                failed_queries_fp)
+
+                checkpoint.save(file_index, fp, Step.MULTI_OBJECT, endpoint_done=True, local_done=False)
+
+            # ---------------- WRITE OUTPUT (FIXED) FILE ----------------
+            if not (resume and checkpoint.step_completed(Step.WRITE_FILE, file_index)):
+
+                # fixed_location = os.path.join(out_dir, str(Path(fp).parent))
+                # os.makedirs(fixed_location, exist_ok=True)
+                # fixed_fp = os.path.join(fixed_location, Path(fp).name)
+
+                abs_data_dir = Path(data_dir).resolve()
+                abs_out_dir = Path(out_dir).resolve()
+
+                rel_path = Path(fp).resolve().relative_to(abs_data_dir)
+                fixed_fp = abs_out_dir / rel_path
+
+                fixed_fp.parent.mkdir(parents=True, exist_ok=True)
 
 
-        # ------ FillerFixer ------
-        for graph in d.graphs():
-            if graph.identifier == d.default_graph.identifier:  # skip default graph
-                continue 
+                if os.path.isfile(fixed_fp) and not overwrite:
+                    raise FileExistsError(f"{fixed_fp} already exists")
+                
+                if abs_data_dir in fixed_fp.parents:  # safeguard for not corrupting input data
+                    raise RuntimeError(f"Refusing to write inside data_dir! {fixed_fp}")
 
-            ff_to_fix_val = graphs_with_fillers.get(graph.identifier)
-            if ff_to_fix_val:
-                ff_issues_in_file.append((graph.identifier, ff_to_fix_val))
-                FillerFixerFile.fix_local_graph(d, graph, rename_mapping, graphs_with_fillers)
+                out_data = d.serialize(format='json-ld', indent=None)
+                with open(fixed_fp, 'w', encoding='utf-8') as out_file:
+                    out_file.write(out_data)
 
-        # Now execute FillerFixer SPARQL updates on the endpoint (delete/rename/adapt)
-        for idx, chunk in enumerate(batched(ff_issues_in_file, chunk_size)):
-            for t in chunk: # queries for FillerFixer are executed per-graph
-                g_id = str(t[0])
-                to_delete = [str(i) for i in t[1]['to_delete']]
-                to_rename = [str(i) for i in t[1]['remaining_snapshots']]
-                local_mapping = FillerFixerFile.map_se_names(to_delete, to_rename)
-                newest_names = list(set(local_mapping.values()))
+                checkpoint.save(file_index, fp, Step.WRITE_FILE, endpoint_done=True, local_done=True)
 
-                del_q = FillerFixerFile.build_delete_sparql_query(t)
-                sparql_update(client, del_q, failed_queries_log)  # send deletion query
-                rename_q = FillerFixerFile.build_rename_sparql_query(local_mapping)
-                sparql_update(client, rename_q, failed_queries_log)  # send query for renaming the rest of the snapshots
+            # checkpoint.save(file_index, fp, Step.DONE, endpoint_done=True, local_done=True)
 
-                adapt_dt_q = FillerFixerFile.build_adapt_invaltime_sparql_query(g_id, newest_names)
-                sparql_update(client, adapt_dt_q, failed_queries_log)  # send query for adapting invalidatedAtTime relations among remaining snapshots
+        # successful termination -> cleanup
+        if os.path.exists(filler_cache_fp):
+            os.remove(filler_cache_fp)
+        if os.path.exists(checkpoint.path):
+            os.remove(checkpoint.path)
 
-        # ------ DateTimeFixer ------                    
-        for graph in d.graphs():
-            if graph.identifier == d.default_graph.identifier:  # skip default graph
-                continue 
+    except (Exception, KeyboardInterrupt) as e:
+        print(traceback.print_exc())
+        if type(e) == KeyboardInterrupt:
+            logging.error("KeyboardInterrupt")
+        else:
+            logging.error(e)
+        logging.info(f"Checkpoint state at process interruption: {checkpoint.state}")
 
-            local_dt_issues = DateTimeFixerFile.detect(graph)
-            if local_dt_issues:
-                dt_issues_in_file.extend(local_dt_issues)
-                DateTimeFixerFile.fix_local_graph(d, graph, local_dt_issues)
-
-
-        for idx, chunk in enumerate(batched(dt_issues_in_file, chunk_size)):
-            q = DateTimeFixerFile.build_update_query(chunk)
-            sparql_update(client, q, failed_queries_log) 
-
-
-        # ------ MissingPrimSourceFixer ------
-        for graph in d.graphs():
-            if graph.identifier == d.default_graph.identifier:  # skip default graph
-                continue 
-            local_no_source_issues = MissingPrimSourceFixerFile.detect(graph)
-            if local_no_source_issues:
-                mps_issues_in_file.append(local_no_source_issues)
-                MissingPrimSourceFixerFile.fix_local_graph(d, graph, local_no_source_issues, meta_dumps)
-
-        for idx, chunk in enumerate(batched(mps_issues_in_file, chunk_size)):
-            q = MissingPrimSourceFixerFile.build_update_query(chunk, meta_dumps)
-            sparql_update(client, q, failed_queries_log) 
-           
-        # ------ MultiPAFixer ------
-        for graph in d.graphs():
-            if graph.identifier == d.default_graph.identifier:  # skip default graph
-                continue 
-            local_multi_pa_issues = MultiPAFixerFile.detect(graph)
-            if local_multi_pa_issues:
-                multi_pa_issues_in_file.extend(local_multi_pa_issues)
-                MultiPAFixerFile.fix_local_graph(d, graph, local_multi_pa_issues)
-
-        for idx, chunk in enumerate(batched(multi_pa_issues_in_file, chunk_size)):
-            q = MultiPAFixerFile.build_update_query(chunk)
-            sparql_update(client, q, failed_queries_log) 
-
-        # ------ MultiObjectFixer ------
-        for graph in d.graphs():
-            if graph.identifier == d.default_graph.identifier:  # skip default graph
-                continue 
-            local_multi_object_issues = MultiObjectFixerFile.detect(graph)
-            if local_multi_object_issues:
-                multi_obj_issues_in_file.append(local_multi_object_issues)
-                MultiObjectFixerFile.fix_local_graph(d, graph, local_multi_object_issues, meta_dumps)
-
-        for idx, chunk, in enumerate(batched(multi_obj_issues_in_file, chunk_size)):
-            q = MultiObjectFixerFile.build_update_query(chunk, meta_dumps)
-            sparql_update(client, q, failed_queries_log)
-
-       # ------ Save corrected dataset to file 
-
-        fixed_location = os.path.join(out_dir, str(Path(fp).parent))
-        os.makedirs(fixed_location, exist_ok=True)
-        fixed_fp = os.path.join(fixed_location, Path(fp).name)  # destination file of corrected dataset
-        if os.path.isfile(fixed_fp) and not overwrite:
-            raise FileExistsError(f"The file {fixed_fp} already exists. To overwrite it, set the 'overwrite' parameter to True.")
-        
-        # Save corrected dataset to file
-        out_data = d.serialize(format='json-ld', indent=None)
-        with open(fixed_fp, 'w', encoding='utf-8') as out_file:
-            out_file.write(out_data)
-        
-    
-    client.close() # close connection to SPARQL endpoint
-    failed_queries_log.close() 
-
-
-
+    finally:
+        client.close()
 
 
 
