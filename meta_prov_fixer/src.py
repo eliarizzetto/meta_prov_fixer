@@ -31,10 +31,74 @@ class Step(IntEnum):
     # DONE = 7
 
 
+# class Checkpoint:
+#     def __init__(self, path: str):
+#         self.path = path
+#         self.state = None
+#         self.load()
+
+#     def load(self):
+#         if os.path.exists(self.path):
+#             with open(self.path, "r", encoding="utf-8") as f:
+#                 self.state = json.load(f)
+#         else:
+#             self.state = None
+
+#     def _atomic_write(self, data: dict, retries=5, delay=0.05):
+#         tmp_path = self.path + ".tmp"
+#         with open(tmp_path, "w", encoding="utf-8") as f:
+#             json.dump(data, f, indent=2)
+#         # os.replace(tmp_path, self.path)
+#         for i in range(retries):
+#             try:
+#                 os.replace(tmp_path, self.path)
+#                 return
+            
+#             #  catch PermissionError: [WinError 5] Accesso negato: 'fix_prov.checkpoint.json.tmp' -> 'fix_prov.checkpoint.json'
+#             except PermissionError:
+#                 time.sleep(delay)
+
+#         raise PermissionError(f"Failed to replace checkpoint file after {retries} retries")
+
+#     def save(
+#         self,
+#         file_index: int,
+#         file_path: str,
+#         step: Step,
+#         endpoint_done: bool,
+#         local_done: bool
+#     ):
+#         self.state = {
+#             "file_index": file_index,
+#             "file_path": file_path,
+#             "step": step.name,
+#             "endpoint_done": endpoint_done,
+#             "local_done": local_done,
+#             "timestamp": datetime.now(timezone.utc).isoformat()
+#         }
+#         self._atomic_write(self.state)
+
+#     def should_skip_file(self, idx: int) -> bool:
+#         return self.state and idx < self.state["file_index"]
+
+#     def step_completed(self, step: Step, file_index:int) -> bool:
+#         if not self.state:
+#             return False
+#         return bool((Step[self.state["step"]] >= step) and self.state["file_index"] >= file_index)
+
+#     def endpoint_completed(self) -> bool:
+#         return self.state and self.state.get("endpoint_done", False)
+
+#     def local_completed(self) -> bool:
+#         return self.state and self.state.get("local_done", False)
+
+
+
 class Checkpoint:
     def __init__(self, path: str):
         self.path = path
         self.state = None
+        self.dirty = False
         self.load()
 
     def load(self):
@@ -60,7 +124,7 @@ class Checkpoint:
 
         raise PermissionError(f"Failed to replace checkpoint file after {retries} retries")
 
-    def save(
+    def update_state(
         self,
         file_index: int,
         file_path: str,
@@ -76,7 +140,12 @@ class Checkpoint:
             "local_done": local_done,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
-        self._atomic_write(self.state)
+        self.dirty = True
+
+    def flush(self):
+        if self.dirty and self.state:
+            self._atomic_write(self.state)
+            self.dirty = False
 
     def should_skip_file(self, idx: int) -> bool:
         return self.state and idx < self.state["file_index"]
@@ -85,12 +154,6 @@ class Checkpoint:
         if not self.state:
             return False
         return bool((Step[self.state["step"]] >= step) and self.state["file_index"] >= file_index)
-
-    def endpoint_completed(self) -> bool:
-        return self.state and self.state.get("endpoint_done", False)
-
-    def local_completed(self) -> bool:
-        return self.state and self.state.get("local_done", False)
 
 
 # --- Caching mechanism for filler issues detection --- #
@@ -944,7 +1007,7 @@ def process(
                                     FillerFixerFile.build_adapt_invaltime_sparql_query(g_id, newest_names),
                                     failed_queries_fp)
 
-                checkpoint.save(file_index, fp, Step.FILLER, endpoint_done=True, local_done=False)
+                checkpoint.update_state(file_index, fp, Step.FILLER, endpoint_done=True, local_done=False)
 
             # ---------------- DATETIME FIXER ----------------
             if not (resume and checkpoint.step_completed(Step.DATETIME, file_index)):
@@ -962,7 +1025,7 @@ def process(
                                 DateTimeFixerFile.build_update_query(chunk),
                                 failed_queries_fp)
 
-                checkpoint.save(file_index, fp, Step.DATETIME, endpoint_done=True, local_done=False)
+                checkpoint.update_state(file_index, fp, Step.DATETIME, endpoint_done=True, local_done=False)
 
             # ---------------- MISSING PRIMARY SOURCE ----------------
             if not (resume and checkpoint.step_completed(Step.MISSING_PS, file_index)):
@@ -980,7 +1043,7 @@ def process(
                                 MissingPrimSourceFixerFile.build_update_query(chunk, meta_dumps),
                                 failed_queries_fp)
 
-                checkpoint.save(file_index, fp, Step.MISSING_PS, endpoint_done=True, local_done=False)
+                checkpoint.update_state(file_index, fp, Step.MISSING_PS, endpoint_done=True, local_done=False)
 
             # ---------------- MULTI PA FIXER ----------------
             if not (resume and checkpoint.step_completed(Step.MULTI_PA, file_index)):
@@ -998,7 +1061,7 @@ def process(
                                 MultiPAFixerFile.build_update_query(chunk),
                                 failed_queries_fp)
 
-                checkpoint.save(file_index, fp, Step.MULTI_PA, endpoint_done=True, local_done=False)
+                checkpoint.update_state(file_index, fp, Step.MULTI_PA, endpoint_done=True, local_done=False)
 
             # ---------------- MULTI OBJECT FIXER ----------------
             if not (resume and checkpoint.step_completed(Step.MULTI_OBJECT, file_index)):
@@ -1016,7 +1079,7 @@ def process(
                                 MultiObjectFixerFile.build_update_query(chunk, meta_dumps),
                                 failed_queries_fp)
 
-                checkpoint.save(file_index, fp, Step.MULTI_OBJECT, endpoint_done=True, local_done=False)
+                checkpoint.update_state(file_index, fp, Step.MULTI_OBJECT, endpoint_done=True, local_done=False)
 
             # ---------------- WRITE OUTPUT (FIXED) FILE ----------------
             if not (resume and checkpoint.step_completed(Step.WRITE_FILE, file_index)):
@@ -1030,6 +1093,7 @@ def process(
 
                 rel_path = Path(fp).resolve().relative_to(abs_data_dir)
                 fixed_fp = abs_out_dir / rel_path
+                fixed_fp = fixed_fp.with_suffix('.json')
 
                 fixed_fp.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1040,13 +1104,14 @@ def process(
                 if abs_data_dir in fixed_fp.parents:  # safeguard for not corrupting input data
                     raise RuntimeError(f"Refusing to write inside data_dir! {fixed_fp}")
 
-                out_data = d.serialize(format='json-ld', indent=None)
+                out_data = d.serialize(format='json-ld', indent=None, separators=(', ', ': '))
                 with open(fixed_fp, 'w', encoding='utf-8') as out_file:
                     out_file.write(out_data)
 
-                checkpoint.save(file_index, fp, Step.WRITE_FILE, endpoint_done=True, local_done=True)
+                checkpoint.update_state(file_index, fp, Step.WRITE_FILE, endpoint_done=True, local_done=True)
 
             # checkpoint.save(file_index, fp, Step.DONE, endpoint_done=True, local_done=True)
+            checkpoint.flush()
 
         # successful termination -> cleanup
         if os.path.exists(filler_cache_fp):
@@ -1063,6 +1128,7 @@ def process(
         logging.info(f"Checkpoint state at process interruption: {checkpoint.state}")
 
     finally:
+        checkpoint.flush()
         client.close()
 
 
