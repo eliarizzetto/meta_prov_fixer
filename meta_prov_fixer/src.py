@@ -731,6 +731,8 @@ def fix_provenance_process(
         data_dir,
         out_dir,
         meta_dumps_register,
+        dry_run=False,
+        dry_run_callback=None,
         chunk_size=100,
         failed_queries_fp=f"prov_fix_failed_queries_{datetime.today().strftime('%Y-%m-%d')}.txt",
         overwrite_ok=False,
@@ -744,6 +746,7 @@ def fix_provenance_process(
 
     checkpoint = Checkpoint(checkpoint_fp)
     client = SPARQLClient(endpoint)
+    ff_c, dt_c, mps_c, pa_c, mo_c = 0, 0, 0, 0, 0  # counters for issues 
 
     try:
         logging.info("Provenance fixing process started.")
@@ -775,16 +778,22 @@ def fix_provenance_process(
             d = Dataset(default_union=True)
             d.parse(data=stringified_data, format='json-ld')
 
+            ff_issues_in_file = []
+            dt_issues = []
+            mps_issues = []
+            pa_issues = []
+            mo_issues = []
+
             # ---------------- FILLER FIXER ----------------
             if not (resume and checkpoint.step_completed(Step.FILLER, file_index)):
 
-                ff_issues_in_file = []
                 for graph in d.graphs():
                     if graph.identifier == d.default_graph.identifier:
                         continue
                     ff_to_fix_val = graphs_with_fillers.get(graph.identifier)
                     if ff_to_fix_val:
                         ff_issues_in_file.append((graph.identifier, ff_to_fix_val))
+                        ff_c += 1
                         FillerFixerFile.fix_local_graph(d, graph, rename_mapping, graphs_with_fillers)
 
                 for chunk in batched(ff_issues_in_file, chunk_size):
@@ -795,118 +804,135 @@ def fix_provenance_process(
                         local_mapping = FillerFixerFile.map_se_names(to_delete, to_rename)
                         newest_names = list(set(local_mapping.values()))
 
-                        sparql_update(client,
-                                    FillerFixerFile.build_delete_sparql_query(t),
-                                    failed_queries_fp)
-                        sparql_update(client,
-                                    FillerFixerFile.build_rename_sparql_query(local_mapping),
-                                    failed_queries_fp)
-                        sparql_update(client,
-                                    FillerFixerFile.build_adapt_invaltime_sparql_query(g_id, newest_names),
-                                    failed_queries_fp)
+                        if not dry_run:
+                            sparql_update(client,
+                                        FillerFixerFile.build_delete_sparql_query(t),
+                                        failed_queries_fp)
+                            sparql_update(client,
+                                        FillerFixerFile.build_rename_sparql_query(local_mapping),
+                                        failed_queries_fp)
+                            sparql_update(client,
+                                        FillerFixerFile.build_adapt_invaltime_sparql_query(g_id, newest_names),
+                                        failed_queries_fp)
 
                 checkpoint.update_state(file_index, fp, Step.FILLER, endpoint_done=True, local_done=False)
 
             # ---------------- DATETIME FIXER ----------------
             if not (resume and checkpoint.step_completed(Step.DATETIME, file_index)):
 
-                dt_issues = []
                 for graph in d.graphs():
                     if graph.identifier != d.default_graph.identifier:
                         issues = DateTimeFixerFile.detect(graph)
                         if issues:
                             dt_issues.extend(issues)
+                            dt_c += len(issues)
                             DateTimeFixerFile.fix_local_graph(d, graph, issues)
 
-                for chunk in batched(dt_issues, chunk_size):
-                    sparql_update(client,
-                                DateTimeFixerFile.build_update_query(chunk),
-                                failed_queries_fp)
+                if not dry_run:
+                    for chunk in batched(dt_issues, chunk_size):
+                        sparql_update(client,
+                                    DateTimeFixerFile.build_update_query(chunk),
+                                    failed_queries_fp)
 
                 checkpoint.update_state(file_index, fp, Step.DATETIME, endpoint_done=True, local_done=False)
 
             # ---------------- MISSING PRIMARY SOURCE ----------------
             if not (resume and checkpoint.step_completed(Step.MISSING_PS, file_index)):
 
-                mps_issues = []
                 for graph in d.graphs():
                     if graph.identifier != d.default_graph.identifier:
                         issue = MissingPrimSourceFixerFile.detect(graph)
                         if issue:
                             mps_issues.append(issue)
+                            mps_c += 1
                             MissingPrimSourceFixerFile.fix_local_graph(d, graph, issue, meta_dumps)
 
-                for chunk in batched(mps_issues, chunk_size):
-                    sparql_update(client,
-                                MissingPrimSourceFixerFile.build_update_query(chunk, meta_dumps),
-                                failed_queries_fp)
+                if not dry_run:
+                    for chunk in batched(mps_issues, chunk_size):
+                        sparql_update(client,
+                                    MissingPrimSourceFixerFile.build_update_query(chunk, meta_dumps),
+                                    failed_queries_fp)
 
                 checkpoint.update_state(file_index, fp, Step.MISSING_PS, endpoint_done=True, local_done=False)
 
             # ---------------- MULTI PA FIXER ----------------
             if not (resume and checkpoint.step_completed(Step.MULTI_PA, file_index)):
 
-                pa_issues = []
                 for graph in d.graphs():
                     if graph.identifier != d.default_graph.identifier:
                         issues = MultiPAFixerFile.detect(graph)
                         if issues:
                             pa_issues.extend(issues)
+                            pa_c += len(issues)
                             MultiPAFixerFile.fix_local_graph(d, graph, issues)
 
-                for chunk in batched(pa_issues, chunk_size):
-                    sparql_update(client,
-                                MultiPAFixerFile.build_update_query(chunk),
-                                failed_queries_fp)
+                if not dry_run:
+                    for chunk in batched(pa_issues, chunk_size):
+                        sparql_update(client,
+                                    MultiPAFixerFile.build_update_query(chunk),
+                                    failed_queries_fp)
 
                 checkpoint.update_state(file_index, fp, Step.MULTI_PA, endpoint_done=True, local_done=False)
 
             # ---------------- MULTI OBJECT FIXER ----------------
             if not (resume and checkpoint.step_completed(Step.MULTI_OBJECT, file_index)):
 
-                mo_issues = []
                 for graph in d.graphs():
                     if graph.identifier != d.default_graph.identifier:
                         issue = MultiObjectFixerFile.detect(graph)
                         if issue:
                             mo_issues.append(issue)
+                            mo_c += 1
                             MultiObjectFixerFile.fix_local_graph(d, graph, issue, meta_dumps)
 
-                for chunk in batched(mo_issues, chunk_size):
-                    sparql_update(client,
-                                MultiObjectFixerFile.build_update_query(chunk, meta_dumps),
-                                failed_queries_fp)
+                if not dry_run:
+                    for chunk in batched(mo_issues, chunk_size):
+                        sparql_update(client,
+                                    MultiObjectFixerFile.build_update_query(chunk, meta_dumps),
+                                    failed_queries_fp)
 
                 checkpoint.update_state(file_index, fp, Step.MULTI_OBJECT, endpoint_done=True, local_done=False)
 
             # ---------------- WRITE OUTPUT (FIXED) FILE ----------------
             if not (resume and checkpoint.step_completed(Step.WRITE_FILE, file_index)):
-
-                abs_data_dir = Path(data_dir).resolve()
-                abs_out_dir = Path(out_dir).resolve()
-
-                rel_path = Path(fp).resolve().relative_to(abs_data_dir)
-                fixed_fp = abs_out_dir / rel_path
-                fixed_fp = fixed_fp.with_suffix('.json')
-
-                fixed_fp.parent.mkdir(parents=True, exist_ok=True)
-
-                if os.path.isfile(fixed_fp) and not overwrite_ok:
-                    raise FileExistsError(f"{fixed_fp} already exists")
                 
-                if abs_data_dir in fixed_fp.parents:  # safeguard for not corrupting input data
-                    raise RuntimeError(f"Refusing to write inside data_dir! {fixed_fp}")
+                if not dry_run:
+                    abs_data_dir = Path(data_dir).resolve()
+                    abs_out_dir = Path(out_dir).resolve()
 
-                out_data = d.serialize(format='json-ld', indent=None, separators=(', ', ': '))
-                with open(fixed_fp, 'w', encoding='utf-8') as out_file:
-                    out_file.write(out_data)
+                    rel_path = Path(fp).resolve().relative_to(abs_data_dir)
+                    fixed_fp = abs_out_dir / rel_path
+                    fixed_fp = fixed_fp.with_suffix('.json')
+
+                    fixed_fp.parent.mkdir(parents=True, exist_ok=True)
+
+                    if os.path.isfile(fixed_fp) and not overwrite_ok:
+                        raise FileExistsError(f"{fixed_fp} already exists")
+                    
+                    if abs_data_dir in fixed_fp.parents:  # safeguard for not corrupting input data
+                        raise RuntimeError(f"Refusing to write inside data_dir! {fixed_fp}")
+
+                    out_data = d.serialize(format='json-ld', indent=None, separators=(', ', ': '))
+                    with open(fixed_fp, 'w', encoding='utf-8') as out_file:
+                        out_file.write(out_data)
 
                 checkpoint.update_state(file_index, fp, Step.WRITE_FILE, endpoint_done=True, local_done=True)
 
             checkpoint.flush()
 
+
+            if dry_run and dry_run_callback:  # use callback function to use issues found in each file
+                dry_run_callback(fp, (ff_issues_in_file, dt_issues, mps_issues, pa_issues, mo_issues))
+
+
         # successful termination -> cleanup
         logging.info(f"Provenance fixing process terminated succesfully.")
+        logging.info(f"Total Filler issues found and fixed: {ff_c}")
+        logging.info(f"Total DateTime issues found and fixed: {dt_c}")
+        logging.info(f"Total Missing Primary Source issues found and fixed: {mps_c}")
+        logging.info(f"Total Multiple Processing Agent issues found and fixed: {pa_c}")
+        logging.info(f"Total Multiple Object issues found and fixed: {mo_c}")
+        
         if os.path.exists(filler_cache_fp):
             os.remove(filler_cache_fp)
         if os.path.exists(checkpoint.path):
@@ -923,9 +949,3 @@ def fix_provenance_process(
     finally:
         checkpoint.flush()
         client.close()
-
-
-
-            
-            
-            
