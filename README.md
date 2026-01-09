@@ -1,24 +1,18 @@
 # meta-prov-fixer
 
-A small toolkit and pipeline to detect and fix provenance issues in the OpenCitations "Meta" dataset.
+A toolkit to detect and fix issues in the OpenCitations Meta provenance dataset.
 
-This repository provides a set of fixers that run detection queries (either against a SPARQL endpoint or reading local RDF dump files) and apply corrective updates to the triplestore. The pipeline coordinates the fixers, supports checkpointing, and logging.
+This repository provides a set of fixers that detect issues reading local RDF dump files and apply corrective updates to the triplestore and the RDF files. The pipeline coordinates the fixers, supports checkpointing, and logging.
 
 ## Features
 
-- Pipeline orchestration (ordered fixers with checkpointing and timing)
+- Pipeline orchestration (ordered fixers with checkpointing and progress bar)
 - Multiple fixers implemented:
   - `FillerFixer` — remove filler snapshots and rename/adjust remaining snapshots
   - `DateTimeFixer` — normalize ill-formed datetime values (make them offset-aware with a consistent format and remove microseconds)
   - `MissingPrimSourceFixer` — add primary source quads for creation snapshots missing them
   - `MultiPAFixer` — normalize snapshots with multiple `prov:wasAttributedTo` values
   - `MultiObjectFixer` — reset graphs where snapshots have too many objects for single-valued properties (creating a new creation snapshot)
-
-- Two operating modes:
-  - SPARQL endpoint mode (detect issues by querying an endpoint and apply fixes)
-  - File-based detection mode (read RDF/JSON-LD dumps locally for detection and still apply fixes to the endpoint)
-
-- Optional auto-restart of Virtuoso DB to prevent OOM error (only for dockerized Virtuoso instances)
 
 ## Requirements
 
@@ -35,52 +29,34 @@ Make sure you have Poetry installed. Then, install dependencies with:
 ```bash
 poetry install
 ```
+
 and activate the virtual environment with:
 
 ```bash
 poetry env activate # for Poetry >= 2.2
 ```
 
-Note: the project provides development dependencies (pytest, notebook, pandas) in `pyproject.toml`.
-
 ## Quick usage
 
 The main CLI entrypoint is `meta_prov_fixer/main.py`. It accepts the following options (brief):
 
-- `-e, --endpoint` (required) — SPARQL endpoint URL to update.
-- `-m, --meta-dumps` (required) — Path to a JSON file containing a list of published meta-dump records; this must be a JSON list of 2-item arrays: `["YYYY-MM-DD", "<dump-doi-or-url>"]`.
-- `-i, --issues-log-dir` — Directory where detected issues (JSON Lines) will be written. Required when `--dump-dir` is used.
-- `-d, --dump-dir` — If provided, detection will read RDF dump provenance files from this directory instead of querying the SPARQL endpoint.
-- `-c, --checkpoint` — Path to a checkpoint file (default: `checkpoint.json`).
-- `--dry-run` — Run pipeline in dry-run mode (no updates applied; useful for debugging).
-- `-l, --log-fp` — File path for pipeline logs. Defaults to `provenance_fix_<today>.log`.
-- `-r, --auto-restart-container` — If set, enables a memory watchdog that automatically restarts the Virtuoso Docker container when Virtuoso's memory usage exceeds 98% of the total memory allocated to the container.
-- `-v, --virtuoso-container` — Name of the Virtuoso Docker container (required when `--auto-restart-container` is used).
+- `-e`, `--endpoint` **(required)** — SPARQL endpoint URL.
+- `-i`, `--data-dir` **(required)** — Path to the directory containing the RDF files to process.
+- `-o`, `--out-dir` **(required)** — Directory where fixed files will be written. If this is the same as `--data-dir` and `--overwrite-ok` is not set, an error will be raised.
+- `-m`, `--meta-dumps` **(required)** — Path to a JSON file with a list of `[date, URL]` pairs; the loader validates the structure (see "Input format for `--meta-dumps`" below).
+- `--chunk-size` — Number of detected issues included in each SPARQL update (default: `100`).
+- `--failed-queries-fp` — File path to log failed SPARQL update queries (default: `prov_fix_failed_queries_<YYYY-MM-DD>.txt`).
+- `-l`, `--log-fp` — File path for the run log (default: `provenance_fix_<YYYY-MM-DD>.log`).
+- `--overwrite-ok` — Allow overwriting input files when `--out-dir` equals `--data-dir` and the input files are decompressed `.json` (default: not set).
+- `--checkpoint-fp` — Path for the checkpoint file used to resume a run (default: `fix_prov.checkpoint.json`).
+- `--cache-fp` — Path for the issues cache file (default: `filler_issues.cache.json`).
 
-Examples:
+### Example
 
-Detect issues from the SPARQL endpoint and apply fixes (only applicable with small datasets, due to memory limits):
-
-```shell
-poetry run python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json
-```
-
-Detect issues from the SPARQL endpoint, save them to disk, and apply fixes (might incur in timeout errors if the dataset is very large):
+Detect issues from RDF files and fix them on the triplestore, and new correct copies of invalid files:
 
 ```shell
-poetry run python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json -i ./data_to_fix
-```
-
-Detect issues by reading RDF dump files, store issues to disk, then apply fixes to the endpoint (particularly useful with large datasets):
-
-```shell
-poetry run python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json -i ./data_to_fix -d C:/path/to/rdf/dumps
-```
-
-Detect issues from RDF files and fix on DB, automatically restarting Virtuoso Docker container if memory usage exceeds 98%:
-
-```shell
-poetry run python -m meta_prov_fixer.main -e http://localhost:8890/sparql/ -m meta_dumps.json -i ./data_to_fix -d "/meta/dump/directory/" -r -v <container_name>
+poetry run python meta_prov_fixer/main.py -e http://localhost:8890/sparql/ -i "../meta_prov/br" -o "../fixed/br" -m meta_dumps.json 
 ```
 
 ## Input format for `--meta-dumps`
@@ -106,19 +82,9 @@ The date format must be ISO-style (YYYY-MM-DD). The CLI loader validates the str
 ## Output and logging
 
 - A log file is written to the path supplied with `-l/--log-fp` (default includes date in filename).
-- When `--issues-log-dir` is provided, each fixer writes detected issues as JSON Lines files to that directory. Following fixes will stream-read these files for updating the endpoint.
 - A checkpoint file (default: `checkpoint.json`) is used to resume the pipeline if interrupted. The pipeline clears the checkpoint after successful completion.
-
-## Project layout
-
-- `meta_prov_fixer/` — package code
-  - `main.py` — CLI entrypoint and argument parsing (this file)
-  - `fix_via_sparql.py` — fixer implementations and the pipeline orchestration (detection and update logic)
-  - `utils.py` — shared helpers (checkpoint management, RDF dump reading, small utilities)
-- `tests/` — unit tests
 
 ## Developer notes
 
-- Use `--dry-run` to validate detection and simulate the pipeline without executing queries.
-- When using file-based detection (`--dump-dir`), supply `--issues-log-dir` so detected issues are stored as JSONL files; those files can be inspected or edited and then used by the same pipeline to apply updates.
-- The pipeline uses a per-fixer and per-phase checkpointing mechanism so long-running runs can be resumed after interruptions.
+- Use `--dry-run` to get detected issues and simulate the pipeline without executing queries or updates to files. Dry runs require a callback function to be specified as the value of `dry_run_callback` parameter in `src.fix_provenance_process()`.
+- The pipeline uses a per-file and per-fixer checkpointing mechanism so long-running runs can be resumed after interruptions.

@@ -96,6 +96,8 @@ def main():
         data_dir=args.data_dir,
         out_dir=args.out_dir,
         meta_dumps_pub_dates=args.meta_dumps,
+        dry_run=False,
+        dry_run_callback=None,
         chunk_size=args.chunk_size,
         failed_queries_fp=args.failed_queries_fp,
         overwrite_ok=args.overwrite_ok,

@@ -740,6 +740,55 @@ def fix_provenance_process(
         checkpoint_fp="fix_prov.checkpoint.json",
         cache_fp="filler_issues.cache.json"
     ):
+    """
+    Fix OpenCitations Meta provenance issues found in RDF dump files and optionally apply fixes to a
+    SPARQL endpoint and output files.
+
+    This function processes all provenance JSON-LD files in ``data_dir`` and detects common
+    issues: fillers, invalid datetime formats, missing primary sources, multiple processing
+    agents, and multiple object occurrences. It applies fixes locally to an ``rdflib.Dataset`` 
+    corresponding to each file and, unless ``dry_run`` is ``True``, issues SPARQL UPDATE 
+    requests to ``endpoint``. When not running in dry-run mode, fixed datasets are dumped to 
+    a file in a subdirectory of ``out_dir`` with a path derived from the input file path 
+    relative to ``data_dir``.
+
+    :param str endpoint: URL of the SPARQL endpoint used to apply updates.
+    :param str data_dir: Path to the directory containing provenance JSON-LD dump files to
+        process.
+    :param str out_dir: Path where fixed JSON-LD files will be written.
+    :param Iterable[Tuple[str, str]] meta_dumps_register: Iterable of ``(publication_date_iso,
+        dump_url)`` pairs used to compute primary source URIs.
+    :param bool dry_run: If ``True``, no SPARQL updates are sent and no output files are
+        written; instead ``dry_run_callback`` (if provided) is invoked per input file with
+        detected issues. Defaults to ``False``.
+    :param callable dry_run_callback: Callback invoked when ``dry_run`` is ``True`` with
+        signature ``(file_path, (ff_issues, dt_issues, mps_issues, pa_issues, mo_issues))``.
+    :param int chunk_size: Number of items per SPARQL update batch. Defaults to ``100``.
+    :param str failed_queries_fp: Path to a log file where failing SPARQL queries are appended.
+        Defaults to ``prov_fix_failed_queries_YYYY-MM-DD.txt``.
+    :param bool overwrite_ok: When ``False``, a :class:`FileExistsError` is raised if a target
+        output file already exists. Defaults to ``False``.
+    :param bool resume: When ``True``, use the checkpoint file to skip already-processed files
+        and steps. Defaults to ``True``.
+    :param str checkpoint_fp: Path of the checkpoint JSON file used to record progress for
+        resuming.
+    :param str cache_fp: Path to the filler issues cache used to avoid re-scanning ``data_dir``.
+
+    :returns: None
+    :rtype: None
+
+    :raises FileExistsError: If ``overwrite_ok`` is False and an output file already exists.
+    :raises RuntimeError: If the function would write inside ``data_dir`` (safeguard to avoid
+        corrupting input).
+    :raises Exception: Other exceptions may be raised for unexpected errors or endpoint
+        failures.
+
+    Side effects
+    - Writes fixed JSON-LD files into ``out_dir`` (unless ``dry_run``).
+    - May send SPARQL UPDATE requests to ``endpoint`` (unless ``dry_run``).
+    - Creates or updates ``checkpoint_fp`` and ``cache_fp`` files.
+    - Logs summary information and error details.
+    """
 
     os.makedirs(out_dir, exist_ok=True)
     logging.info(f"[Provenance fixing process paradata]: {locals()}") # log parameters
