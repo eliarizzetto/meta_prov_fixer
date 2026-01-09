@@ -4,8 +4,7 @@ import json
 import logging
 import datetime
 
-from meta_prov_fixer.fix_via_sparql import fix_process, fix_process_reading_from_files
-from meta_prov_fixer.virtuoso_watchdog import start_watchdog_thread
+from meta_prov_fixer.src import fix_provenance_process
 
 def load_meta_dumps(json_path: str):
     """
@@ -26,7 +25,7 @@ def load_meta_dumps(json_path: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run the pipeline for fixing Meta provenance triplestore"
+        description="Run the pipeline for fixing Meta provenance triplestore and RDF files."
     )
 
     parser.add_argument(
@@ -35,58 +34,55 @@ def main():
     )
 
     parser.add_argument(
+        "-i", "--data-dir", type=str, required=True,
+        help="Path to directory containing the RDF files to process."
+    )
+
+    parser.add_argument(
+        "-o", "--out-dir", type=str, required=True,
+        help="Directory where to save fixed files. If it is the same as data-dir and 'overwrite' is False, an Error will be raised."
+    )
+
+    parser.add_argument(
         "-m", "--meta-dumps", type=load_meta_dumps, required=True,
         help="Path to JSON file with list of [date, URL] pairs"
     )
 
     parser.add_argument(
-        "-i", "--issues-log-dir", type=str, default=None,
-        help="Directory to save data to fix. Required if using --dump-dir."
+        "--chunk-size", type=int, default=100,
+        help="Number of detected issues to process in each SPARQL update query. Default is 100."
     )
 
     parser.add_argument(
-        "-c", "--checkpoint", type=str, default="checkpoint.json",
-        help="Path to checkpoint file"
-    )
-
-    parser.add_argument(
-        "--dry-run", action="store_true",
-        help="Run in dry-run mode (no update queries made to the database)."
-    )
-
-    parser.add_argument(
-        "-d", "--dump-dir", type=str, default=None,
-        help="Path to directory containing RDF dumps. If provided, "
-             "the pipeline reads from files instead of querying the endpoint."
+        "--failed-queries-fp", type=str, default=f"prov_fix_failed_queries_{datetime.date.today().strftime('%Y-%m-%d')}.txt",
+        help="File path to log failed SPARQL update queries. Default is 'prov_fix_failed_queries_<today's date>.txt'."
     )
 
     parser.add_argument(
         "-l", "--log-fp", type=str,
         default=f"provenance_fix_{datetime.date.today().strftime('%Y-%m-%d')}.log",
-        help="File path to log file."
+        help="File path to log file. Default is 'provenance_fix_<today's date>.log'."
     )
 
     parser.add_argument(
-        "-r", "--auto-restart-container", action="store_true",
-        help="Enable memory watchdog to auto-restart the Virtuoso Docker container when memory usage is too high."
+        "--overwrite-ok", action="store_true",
+        help="If specified, allows overwriting the input file with the fixed output without raising errors. "
+            "To be overwritten, the input file must still be a decompressed .json file and '--out-dir' must be "
+            "the same as '--data-dir'. Default is False."
     )
 
     parser.add_argument(
-        "-v", "--virtuoso-container", type=str, default=None,
-        help="Name of the Virtuoso Docker container (required when --auto-restart-container is used)."
+        "--checkpoint-fp", type=str, default="fix_prov.checkpoint.json",
+        help="File path to store checkpoint information for resuming the process. Default is 'fix_prov.checkpoint.json'."
+    )
+
+    parser.add_argument(
+        "--cache-fp", type=str, default="filler_issues.cache.json",
+        help="File path to store cache of detected issues. Default is 'filler_issues.cache.json'."
     )
 
     args = parser.parse_args()
 
-    if args.auto_restart_container:
-        if not args.virtuoso_container:
-            parser.error(
-                "--virtuoso-container is required when using --auto-restart-container"
-            )
-
-    # --- Enforce issues_log_dir if dump_dir is used ---
-    if args.dump_dir and not args.issues_log_dir:
-        parser.error("--issues-log-dir (-i) is required when using --dump-dir")
 
     # --- Logging setup ---
     logging.basicConfig(
@@ -95,63 +91,24 @@ def main():
         filename=args.log_fp
     )
 
-    logging.info("Starting provenance fixing pipeline…")
-    logging.info(f"Endpoint: {args.endpoint}")
-    logging.info(f"Dump dir: {args.dump_dir or 'None (SPARQL endpoint mode)'}")
-    logging.info(f"Issues log dir: {args.issues_log_dir}")
-    logging.info(f"Checkpoint: {args.checkpoint}")
-    logging.info(f"Dry run: {args.dry_run}")
-    logging.info(f"Auto-restart enabled: {args.auto_restart_container}")
-    logging.info(f"Virtuoso container: {args.virtuoso_container}")
-
-    # --- Start the Virtuoso memory watchdog thread if enabled ---
-    if args.auto_restart_container:
-        logging.info("Starting Virtuoso memory watchdog thread...")
-        start_watchdog_thread(
-            container_name=args.virtuoso_container,
-            endpoint=args.endpoint
-        )
-    else:
-        logging.info("Auto-restart watchdog disabled.")
-
-    # --- Choose processing mode ---
-    if args.dump_dir:
-        logging.info("Running pipeline in 'file-based' mode (reading from RDF dumps).")
-        fix_process_reading_from_files(
-            endpoint=args.endpoint,
-            dump_dir=args.dump_dir,
-            issues_log_dir=args.issues_log_dir,
-            meta_dumps_pub_dates=args.meta_dumps,
-            dry_run=args.dry_run,
-            checkpoint_fp=args.checkpoint
-        )
-    else:
-        logging.info("Running pipeline in 'SPARQL endpoint' mode.")
-        fix_process(
-            endpoint=args.endpoint,
-            meta_dumps_pub_dates=args.meta_dumps,
-            issues_log_dir=args.issues_log_dir or "data_to_fix",
-            dry_run=args.dry_run,
-            checkpoint_fp=args.checkpoint
-        )
-
-    logging.info("Provenance fixing pipeline completed successfully.")
+    fix_provenance_process(
+        endpoint_url=args.endpoint,
+        data_dir=args.data_dir,
+        out_dir=args.out_dir,
+        meta_dumps_pub_dates=args.meta_dumps,
+        chunk_size=args.chunk_size,
+        failed_queries_fp=args.failed_queries_fp,
+        overwrite_ok=args.overwrite_ok,
+        resume=True,
+        checkpoint_fp=args.checkpoint_fp,
+        cache_fp=args.cache_fp
+    )
 
 
 if __name__ == "__main__":
     main()
 
 
-## Detect issues from DB and fix on DB (storing errors in memory only):
-## poetry run python meta_prov_fixer/main.py -e http://localhost:8890/sparql/ -m meta_dumps.json 
 
-
-## Detect issues from RDF files and fix on DB:
-## poetry run python meta_prov_fixer/main.py -e http://localhost:8890/sparql/ -m meta_dumps.json -i "./data_to_fix" -d "/meta/dump/directory/"
-
-
-## Detect issues from RDF files and fix on DB, automatically restarting Virtuoso Docker container if memory usage exceeds 98%
-## poetry run python meta_prov_fixer/main.py -e http://localhost:8890/sparql/ -m meta_dumps.json -i ./data_to_fix -d "/meta/dump/directory/" --auto-restart-container --virtuoso-container <container_name>
-
-
-
+## Detect and fix provenance issues:
+## poetry run python meta_prov_fixer/main.py -e http://localhost:8890/sparql/ -i "../meta_prov/br" -o "../fixed/br" -m meta_dumps.json 

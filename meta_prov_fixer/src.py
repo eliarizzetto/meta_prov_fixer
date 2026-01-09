@@ -726,20 +726,21 @@ def sparql_update(
 
 
 
-def process(
+def fix_provenance_process(
         endpoint,
         data_dir,
-        meta_dumps_register,
         out_dir,
+        meta_dumps_register,
         chunk_size=100,
         failed_queries_fp=f"prov_fix_failed_queries_{datetime.today().strftime('%Y-%m-%d')}.txt",
-        overwrite=False,
+        overwrite_ok=False,
         resume=True,
         checkpoint_fp="fix_prov.checkpoint.json",
         cache_fp="filler_issues.cache.json"
     ):
 
     os.makedirs(out_dir, exist_ok=True)
+    logging.info(f"[Provenance fixing process paradata]: {locals()}") # log parameters
 
     checkpoint = Checkpoint(checkpoint_fp)
     client = SPARQLClient(endpoint)
@@ -890,7 +891,7 @@ def process(
 
                 fixed_fp.parent.mkdir(parents=True, exist_ok=True)
 
-                if os.path.isfile(fixed_fp) and not overwrite:
+                if os.path.isfile(fixed_fp) and not overwrite_ok:
                     raise FileExistsError(f"{fixed_fp} already exists")
                 
                 if abs_data_dir in fixed_fp.parents:  # safeguard for not corrupting input data
@@ -905,6 +906,7 @@ def process(
             checkpoint.flush()
 
         # successful termination -> cleanup
+        logging.info(f"Provenance fixing process terminated succesfully.")
         if os.path.exists(filler_cache_fp):
             os.remove(filler_cache_fp)
         if os.path.exists(checkpoint.path):

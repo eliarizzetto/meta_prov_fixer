@@ -5,7 +5,7 @@ from rdflib.plugins.sparql.processor import prepareQuery, SPARQLResult
 from rdflib import Dataset, URIRef, Literal
 import json
 import re
-from meta_prov_fixer.fix_via_sparql import *
+from meta_prov_fixer.legacy.fix_via_sparql import *
 from pprint import pprint
 from datetime import datetime
 from rdflib.compare import isomorphic, graph_diff

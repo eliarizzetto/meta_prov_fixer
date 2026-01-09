@@ -13,7 +13,7 @@ import os
 import glob
 from typing import Union
 import logging
-from meta_prov_fixer.src import process, FillerFixerFile, DateTimeFixerFile, MissingPrimSourceFixerFile, MultiPAFixerFile, MultiObjectFixerFile
+from meta_prov_fixer.src import fix_provenance_process, FillerFixerFile, DateTimeFixerFile, MissingPrimSourceFixerFile, MultiPAFixerFile, MultiObjectFixerFile
 from meta_prov_fixer.utils import get_rdf_prov_filepaths
 import meta_prov_fixer.src
 from pprint import pprint
@@ -137,11 +137,11 @@ class TestProcessOnFile(BaseTestCase):
 
         mock_updt.side_effect = self.mock_sparql_update
 
-        process(
+        fix_provenance_process(
             endpoint=self.sparql_endpoint,
             data_dir=self.fake_dump_dir,
-            meta_dumps_register=self.meta_dumps_pub_dates,
             out_dir=OUT_DIR,
+            meta_dumps_register=self.meta_dumps_pub_dates,
             failed_queries_fp="tests/data/fix_process_log/failed_queries",
             chunk_size=100,
             resume=False,

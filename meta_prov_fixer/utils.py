@@ -326,6 +326,7 @@ def chunker(
         it = iter(source)
         yield from _chunk_iter(it)
 
+
 class CheckpointManager:
     def __init__(self, path="checkpoint.json"):
         self.path = path
@@ -387,15 +388,6 @@ def checkpointed_batch(stream, batch_size, fixer_name=None, phase=None, ckpnt_mn
         yield idx, (batch, line_num)
         ckpnt_mngr.save(fixer_name, phase, idx)
     
-# def save_detection_checkpoint(fixer_name=None, phase=None, checkpoint=Union[None, CheckpointManager]):
-#     """
-#     Saves to checkpoint the state indicating that a fixer's detection step has completed succesfully.
-#     """
-
-#     if checkpoint is None:
-#         return
-#     else:
-#         checkpoint.save(fixer_name, phase, -1)
 
 def detection_completed(fixer_name=None, checkpoint=Union[None, CheckpointManager])-> bool:
     """
@@ -434,58 +426,6 @@ class TimedProcess:
         remaining = (self.total_phases - current_phase_idx - 1) * avg
         return elapsed, remaining
 
-
-# def read_rdf_dump(data_dir: str, whole_file=False) -> Union[Generator[dict, None, None], Generator[List, None, None]]:
-#     """
-#     Iterates over the files in any given directory storing OpenCitations Meta RDF **PROVENANCE** files
-#     and yields the JSON-LD data. If `whole_file` is False (default), yields single named graphs as 
-#     dictionaries, else if `whole_file` is True yields the whole parsed JSON file as a list of dictionaries.
-   
-#     :param data_dir: Path to the directory containing the decompressed provenance archive.
-#     :param whole_file: (default: False) If True, yield whole files, else single named graphs.
-#     :yield: Dictionary or list of dictionaries corrisponding to (a) named graph(s).
-#     """
-
-
-#     for dirpath, _, filenames in os.walk(data_dir):
-#         if os.path.basename(dirpath) == 'prov':
-#             for fn in filenames:
-
-#                 fp = os.path.join(dirpath,fn)
-
-#                 if fp.endswith('.zip'):
-#                     with ZipFile(fp) as archive:  # Handle zip files
-#                         for f in archive.filelist:
-#                             if f.filename.endswith('.json'):
-#                                 with archive.open(f.filename) as f:
-#                                     data = json.load(f)
-#                                     if not whole_file:
-#                                         for g in data:
-#                                             yield g
-#                                     else:
-#                                         yield data
-
-#                 elif fp.endswith('.json.xz'):  # Handle lzma2 (.xz) files
-#                     with lzma.open(fp, 'rt', encoding='utf-8') as f:
-#                         data = json.load(f)
-#                         if not whole_file:
-#                             for g in data:
-#                                 yield g
-#                         else:
-#                             yield data
-                
-#                 elif fp.endswith('.json'):  # assumes files are already decompressed
-#                     # continue if there is a compressed file with the same name in the same directory
-#                     if os.path.exists(fp + '.xz') or os.path.exists(fp.removesuffix('.json') + '.zip'):
-#                         continue
-                    
-#                     with open(fp, 'r', encoding='utf-8') as f:
-#                         data = json.load(f)
-#                         if not whole_file:
-#                             for g in data:
-#                                 yield g
-#                         else:
-#                             yield data
 
 
 def get_rdf_prov_filepaths(data_dir):
