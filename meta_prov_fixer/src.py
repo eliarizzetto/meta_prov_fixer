@@ -683,8 +683,9 @@ def prepare_filler_issues(data_dir)->Tuple[List[tuple], int]:
 
     for file_data in tqdm(
             read_rdf_dump(data_dir, whole_file=True),
-            desc=f'Detecting graphs with fillers for all graphs in {data_dir}',
-            total=tot_files
+            desc=f'Detecting graphs with fillers...',
+            total=tot_files,
+            dynamic_ncols=True
         ):
         stringified_data = json.dumps(file_data)
         d = Dataset(default_union=True)
@@ -818,7 +819,8 @@ def fix_provenance_process(
                 tqdm(
                     read_rdf_dump(data_dir, whole_file=True, include_fp=True), 
                     desc="Processing RDF dump files...",
-                    total=tot_files
+                    total=tot_files,
+                    dynamic_ncols=True
                 )
             ):
 
@@ -997,6 +999,7 @@ def fix_provenance_process(
             logging.error("KeyboardInterrupt")
         else:
             logging.error(e)
+        elapsed = time.time() - start_time
         logging.info(f"Process ran for {elapsed/3600:.2f} hours before interruption.")
         logging.info(f"Checkpoint state at process interruption: {checkpoint.state}")
 
