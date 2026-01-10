@@ -82,7 +82,7 @@ The date format must be ISO-style (YYYY-MM-DD). The CLI loader validates the str
 ## Output and logging
 
 - A log file is written to the path supplied with `-l/--log-fp` (default includes date in filename).
-- A checkpoint file (default: `checkpoint.json`) is used to resume the pipeline if interrupted. The pipeline clears the checkpoint after successful completion.
+- A checkpoint file (default: `fix_prov.checkpoint.json`) is used to resume the pipeline if interrupted. The pipeline clears the checkpoint after successful completion.
 
 ## Developer notes
 

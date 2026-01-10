@@ -790,6 +790,8 @@ def fix_provenance_process(
     - Logs summary information and error details.
     """
 
+    start_time = time.time()
+
     os.makedirs(out_dir, exist_ok=True)
     logging.info(f"[Provenance fixing process paradata]: {locals()}") # log parameters
 
@@ -975,7 +977,9 @@ def fix_provenance_process(
 
 
         # successful termination -> cleanup
-        logging.info(f"Provenance fixing process terminated succesfully.")
+        elapsed = time.time() - start_time
+        logging.info(f"Provenance fixing process completed successfully in {elapsed/3600:.2f} hours.")
+        print(f"Provenance fixing process completed successfully in {elapsed/3600:.2f} hours.")
         logging.info(f"Total Filler issues found and fixed: {ff_c}")
         logging.info(f"Total DateTime issues found and fixed: {dt_c}")
         logging.info(f"Total Missing Primary Source issues found and fixed: {mps_c}")
@@ -993,6 +997,7 @@ def fix_provenance_process(
             logging.error("KeyboardInterrupt")
         else:
             logging.error(e)
+        logging.info(f"Process ran for {elapsed/3600:.2f} hours before interruption.")
         logging.info(f"Checkpoint state at process interruption: {checkpoint.state}")
 
     finally:
