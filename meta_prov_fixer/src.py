@@ -827,6 +827,8 @@ def fix_provenance_process(
                 )
             ):
 
+            start_file = time.time()
+
             if resume and checkpoint.should_skip_file(file_index):
                 continue
 
@@ -980,6 +982,7 @@ def fix_provenance_process(
             client_reset_counter += 1
             if not dry_run and client_reset_counter >= client_recreate_interval:
                 logging.info(f"Recreating SPARQLClient after {client_reset_counter} files to clear accumulated pycurl state")
+                logging.info(f"Time taken for latest file: {time.time() - start_file:.2f} seconds")
                 client.close()
                 client = SPARQLClient(endpoint)
                 client_reset_counter = 0
