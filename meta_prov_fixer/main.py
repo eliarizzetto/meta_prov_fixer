@@ -87,15 +87,15 @@ def main():
     # --- Logging setup ---
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
+        format="%(asctime)s - %(levelname)s - [%(funcName)s, %(filename)s:%(lineno)d] - %(message)s",
         filename=args.log_fp
     )
 
     fix_provenance_process(
-        endpoint_url=args.endpoint,
+        endpoint=args.endpoint,
         data_dir=args.data_dir,
         out_dir=args.out_dir,
-        meta_dumps_pub_dates=args.meta_dumps,
+        meta_dumps_register=args.meta_dumps,
         dry_run=False,
         dry_run_callback=None,
         chunk_size=args.chunk_size,
