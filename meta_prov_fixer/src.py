@@ -738,7 +738,8 @@ def fix_provenance_process(
         overwrite_ok=False,
         resume=True,
         checkpoint_fp="fix_prov.checkpoint.json",
-        cache_fp="filler_issues.cache.json"
+        cache_fp="filler_issues.cache.json",
+        client_recreate_interval=100
     ):
     """
     Fix OpenCitations Meta provenance issues found in RDF dump files and optionally apply fixes to a
@@ -773,6 +774,11 @@ def fix_provenance_process(
     :param str checkpoint_fp: Path of the checkpoint JSON file used to record progress for
         resuming.
     :param str cache_fp: Path to the filler issues cache used to avoid re-scanning ``data_dir``.
+    :param int client_recreate_interval: Number of files to process before recreating the SPARQLClient
+        to prevent pycurl's accumulated state from degrading performance. Defaults to ``100``.
+        This is necessary because pycurl's Curl object accumulates internal state (DNS cache,
+        connection pool, SSL/TLS session state) over hundreds of thousands of requests,
+        causing progressive performance degradation.
 
     :returns: None
     :rtype: None
@@ -795,7 +801,8 @@ def fix_provenance_process(
 
     checkpoint = Checkpoint(checkpoint_fp)
     client = SPARQLClient(endpoint)
-    ff_c, dt_c, mps_c, pa_c, mo_c = 0, 0, 0, 0, 0  # counters for issues 
+    ff_c, dt_c, mps_c, pa_c, mo_c = 0, 0, 0, 0, 0  # counters for issues
+    client_reset_counter = 0  # Track files processed with current client instance
 
     try:
         logging.info("Provenance fixing process started.")
@@ -969,6 +976,13 @@ def fix_provenance_process(
 
             checkpoint.flush()
 
+            # Periodically recreate SPARQLClient to prevent pycurl's accumulated state degradation
+            client_reset_counter += 1
+            if not dry_run and client_reset_counter >= client_recreate_interval:
+                logging.info(f"Recreating SPARQLClient after {client_reset_counter} files to clear accumulated pycurl state")
+                client.close()
+                client = SPARQLClient(endpoint)
+                client_reset_counter = 0
 
             if dry_run and dry_run_callback:  # use callback function to use issues found in each file
                 dry_run_callback(fp, (ff_issues_in_file, dt_issues, mps_issues, pa_issues, mo_issues))
