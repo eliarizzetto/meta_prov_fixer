@@ -5,6 +5,7 @@ import logging
 import datetime
 
 from meta_prov_fixer.src import fix_provenance_process
+from meta_prov_fixer.virtuoso_watchdog import start_watchdog_thread
 
 def load_meta_dumps(json_path: str):
     """
@@ -81,7 +82,23 @@ def main():
         help="File path to store cache of detected issues. Default is 'filler_issues.cache.json'."
     )
 
+    parser.add_argument(
+        "-r", "--auto-restart-container", action="store_true",
+        help="Enable memory watchdog to auto-restart the Virtuoso Docker container when memory usage is too high."
+    )
+
+    parser.add_argument(
+        "-v", "--virtuoso-container", type=str, default=None,
+        help="Name of the Virtuoso Docker container (required when --auto-restart-container is used)."
+    )
+
     args = parser.parse_args()
+
+    if args.auto_restart_container:
+        if not args.virtuoso_container:
+            parser.error(
+                "--virtuoso-container is required when using --auto-restart-container"
+            )
 
 
     # --- Logging setup ---
@@ -90,6 +107,17 @@ def main():
         format="%(asctime)s - %(levelname)s - [%(funcName)s, %(filename)s:%(lineno)d] - %(message)s",
         filename=args.log_fp
     )
+
+
+    # --- Start the Virtuoso memory watchdog thread if enabled ---
+    if args.auto_restart_container:
+        logging.info("Starting Virtuoso memory watchdog thread...")
+        start_watchdog_thread(
+            container_name=args.virtuoso_container,
+            endpoint=args.endpoint
+        )
+    else:
+        logging.info("Auto-restart watchdog disabled.")
 
     fix_provenance_process(
         endpoint=args.endpoint,

@@ -5,7 +5,7 @@ import logging
 import datetime
 
 from meta_prov_fixer.legacy.fix_via_sparql import fix_process, fix_process_reading_from_files
-from meta_prov_fixer.legacy.virtuoso_watchdog import start_watchdog_thread
+from meta_prov_fixer.virtuoso_watchdog import start_watchdog_thread
 
 def load_meta_dumps(json_path: str):
     """

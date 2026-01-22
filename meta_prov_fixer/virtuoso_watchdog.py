@@ -25,7 +25,7 @@ def monitor_and_restart(
     container_name: str,
     endpoint: str,
     threshold: float = 0.98,
-    interval: int = 300
+    interval: int = 3600
 ):
     """
     Background thread: monitor Docker memory usage and restart Virtuoso
@@ -35,6 +35,7 @@ def monitor_and_restart(
     threshold=0.98 means 98% of allowed container memory.
     """
     client = docker.from_env()
+    GiB = 1024 ** 3
 
     while True:
         try:
@@ -49,9 +50,9 @@ def monitor_and_restart(
             effective_used = used - cache
             ratio = effective_used / limit
 
-            logging.debug(f"[Virtuoso watchdog] Mem use: {effective_used/1e9:.2f}GB / {limit/1e9:.2f}GB ({ratio*100:.1f}%)")
+            logging.info(f"[Virtuoso watchdog] Mem use: {effective_used/GiB:.2f}GiB / {limit/GiB:.2f}GiB ({ratio*100:.1f}%)")
             if ratio > threshold:
-                logging.warning(f"[Virtuoso watchdog] Mem use: {effective_used/1e9:.2f}GB / {limit/1e9:.2f}GB ({ratio*100:.1f}%)")
+                logging.warning(f"[Virtuoso watchdog] Mem use: {effective_used/GiB:.2f}GiB / {limit/GiB:.2f}GiB ({ratio*100:.1f}%)")
                 logging.warning(f"[Virtuoso watchdog] Memory above {threshold*100}% → restarting Virtuoso container")
 
                 container.restart()
