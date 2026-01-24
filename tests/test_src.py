@@ -14,7 +14,7 @@ import glob
 from typing import Union
 import logging
 from meta_prov_fixer.src import fix_provenance_process, FillerFixerFile, DateTimeFixerFile, MissingPrimSourceFixerFile, MultiPAFixerFile, MultiObjectFixerFile
-from meta_prov_fixer.utils import get_rdf_prov_filepaths
+from meta_prov_fixer.utils import get_rdf_prov_filepaths, read_rdf_dump
 import meta_prov_fixer.src
 from pprint import pprint
 import shutil
@@ -146,7 +146,8 @@ class TestProcessOnFile(BaseTestCase):
             chunk_size=100,
             resume=False,
             checkpoint_fp="test_fix_prov.checkpoint.json",
-            cache_fp="test_filler_issues.cache.json"
+            cache_fp="test_filler_issues.cache.json",
+            zip_output=True,
         )
 
         # --------- Check fixes ON (simulated) TRIPLESTORE ------------
@@ -184,12 +185,10 @@ class TestProcessOnFile(BaseTestCase):
         
         # --------- Check fixes ON FILES ------------
 
-        fixed_dumped_files = [f for f in get_rdf_prov_filepaths(OUT_DIR)]
-        print(fixed_dumped_files)
         on_file_output = Dataset(default_union=True)
-        for f in fixed_dumped_files:
+        for d in read_rdf_dump(OUT_DIR, whole_file=True):
             _tmp = Dataset(default_union=True)
-            _tmp.parse(f, format='json-ld')
+            _tmp.parse(data=json.dumps(d), format='json-ld')
             on_file_output += _tmp
         
         on_file_out_norm = normalize_jsonld(json.loads(self.normalize_datetime_literals(on_file_output.serialize(format='json-ld'))))

@@ -140,5 +140,5 @@ if __name__ == "__main__":
 
 
 
-## Detect and fix provenance issues:
-## poetry run python meta_prov_fixer/main.py -e http://localhost:8890/sparql/ -i "../meta_prov/br" -o "../fixed/br" -m meta_dumps.json 
+## Detect and fix provenance issues (with auto-restart watchdog for Virtuoso):
+## poetry run python meta_prov_fixer/main.py -e http://localhost:8890/sparql/ -i "../meta_prov/br" -o "../fixed/br" -m meta_dumps.json -r -v oc-meta-prov

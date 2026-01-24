@@ -16,8 +16,9 @@ from pathlib import Path
 import logging
 import traceback
 import time
-
+from zipfile import ZipFile, ZIP_DEFLATED
 from enum import IntEnum
+
 
 class Step(IntEnum):
     START = 0
@@ -741,7 +742,8 @@ def fix_provenance_process(
         resume=True,
         checkpoint_fp="fix_prov.checkpoint.json",
         cache_fp="filler_issues.cache.json",
-        client_recreate_interval=100
+        client_recreate_interval=100,
+        zip_output=True,
     ):
     """
     Fix OpenCitations Meta provenance issues found in RDF dump files and optionally apply fixes to a
@@ -781,6 +783,7 @@ def fix_provenance_process(
         This is necessary because pycurl's Curl object accumulates internal state (DNS cache,
         connection pool, SSL/TLS session state) over hundreds of thousands of requests,
         causing progressive performance degradation.
+    :param bool zip_output: If ``True``, output files are compressed using zip. Defaults to ``True``.
 
     :returns: None
     :rtype: None
@@ -807,6 +810,7 @@ def fix_provenance_process(
     client = SPARQLClient(endpoint)
     ff_c, dt_c, mps_c, pa_c, mo_c = 0, 0, 0, 0, 0  # counters for issues
     client_reset_counter = 0  # Track files processed with current client instance
+    times_per_file = []
 
     try:
         logging.info("Provenance fixing process started.")
@@ -976,9 +980,14 @@ def fix_provenance_process(
                         raise RuntimeError(f"Refusing to write inside data_dir! {fixed_fp}")
 
                     out_data = d.serialize(format='json-ld', indent=None, separators=(', ', ': '))
-                    with open(fixed_fp, 'w', encoding='utf-8') as out_file:
-                        out_file.write(out_data)
 
+                    if zip_output:
+                        with ZipFile(fixed_fp.with_suffix('.zip'), 'w', compression=ZIP_DEFLATED, allowZip64=True) as zipf:
+                            zipf.writestr(fixed_fp.name, out_data)
+                    else:
+                        with open(fixed_fp, 'w', encoding='utf-8') as out_file:
+                            out_file.write(out_data)
+            
                 checkpoint.update_state(file_index, fp, Step.WRITE_FILE, endpoint_done=True, local_done=True)
 
             checkpoint.flush()
@@ -986,14 +995,21 @@ def fix_provenance_process(
             # Periodically recreate SPARQLClient to prevent pycurl's accumulated state degradation
             client_reset_counter += 1
             if not dry_run and client_reset_counter >= client_recreate_interval:
-                logging.info(f"Recreating SPARQLClient after {client_reset_counter} files to clear accumulated pycurl state")
-                logging.info(f"Time taken for latest file: {time.time() - start_file:.2f} seconds")
+                logging.debug(f"Recreating SPARQLClient after {client_reset_counter} files to clear accumulated pycurl state")
                 client.close()
                 client = SPARQLClient(endpoint)
                 client_reset_counter = 0
 
             if dry_run and dry_run_callback:  # use callback function to use issues found in each file
                 dry_run_callback(fp, (ff_issues_in_file, dt_issues, mps_issues, pa_issues, mo_issues))
+            
+            elapsed_file :float = time.time() - start_file
+            times_per_file.append(elapsed_file)
+            if file_index % 500 == 0:
+                avg_time = sum(times_per_file)/len(times_per_file)
+                est_remaining = avg_time * (tot_files - file_index - 1)
+                logging.info(f"Average time per file with last {len(times_per_file)} files: {avg_time:.2f} seconds. Estimated remaining time: {est_remaining/3600:.2f} hours.")
+                times_per_file = []
 
 
         # successful termination -> cleanup
