@@ -32,7 +32,7 @@ def sparql_healthcheck(endpoint: str, timeout: int = 5) -> bool:
     """
 
     try:
-        with SPARQLClient(endpoint, timeout=timeout) as client:
+        with SPARQLClient(endpoint) as client:
             result = client.query(q)
             if len(result["results"]["bindings"]) > 0:
                 return True
