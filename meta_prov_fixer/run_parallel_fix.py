@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import signal
 from pathlib import Path
 import argparse
 import os
@@ -146,7 +147,12 @@ def main():
     except KeyboardInterrupt:
         print("\nKeyboardInterrupt received: terminating all fixer processes")
         for _, p in processes:
-            p.terminate()
+            # Send SIGINT to each process so they can clean up gracefully
+            try:
+                p.send_signal(signal.SIGINT)
+            except ProcessLookupError:
+                # Process already terminated
+                pass
         sys.exit(1)
 
     print("All fixer processes completed")
