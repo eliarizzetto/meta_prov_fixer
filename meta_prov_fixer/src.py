@@ -310,11 +310,16 @@ class FillerFixerFile:
         snapshots_strings:list = sorted(unsorted_curr_snpsts_strngs, key=lambda x: get_seq_num(str(x)))
 
         for s, following_se in zip(snapshots_strings, snapshots_strings[1:]):
-            new_invaldt = min(
-                list(ds.graph(graph.identifier).objects(URIRef(following_se), PROV.generatedAtTime, unique=True)),
-                key=lambda x: normalise_datetime(str(x))
-            )
-            # ds.set((URIRef(s), PROV.invalidatedAtTime, new_invaldt))
+            try:
+                new_invaldt = min(
+                    list(ds.graph(graph.identifier).objects(URIRef(following_se), PROV.generatedAtTime, unique=True)),
+                    key=lambda x: normalise_datetime(str(x))
+                )
+            except ValueError:
+                # TODO: This should be a very rare case, but consider implementing a more robust handling
+                logging.error(f"Cannot find prov:generatedAtTime for snapshot {following_se} in graph {graph.identifier}. Skipping invalidatedAtTime update for snapshot {s}.")
+                continue
+
             for old_invaldt in ds.graph(graph.identifier).objects(URIRef(s), PROV.invalidatedAtTime, unique=True):
                 ds.remove((URIRef(s), PROV.invalidatedAtTime, old_invaldt, graph.identifier))
             ds.add((URIRef(s), PROV.invalidatedAtTime, new_invaldt, graph.identifier))
@@ -500,7 +505,11 @@ class MissingPrimSourceFixerFile:
 
         creation_se_uri = URIRef(graph.identifier + 'se/1')
         if ((creation_se_uri, PROV.generatedAtTime, None) in graph) and not ((creation_se_uri, PROV.hadPrimarySource, None) in graph):
-            genTime = min(graph.objects(creation_se_uri, PROV.generatedAtTime))
+            try:
+                genTime = min(graph.objects(creation_se_uri, PROV.generatedAtTime))
+            except ValueError:
+                logging.warning(f"Could not find generatedAtTime value for creation snapshot {creation_se_uri}. Skipping MissingPrimSourceFixerFile detection.")
+                return None
             return (creation_se_uri, genTime)
 
     def fix_local_graph(ds:Dataset, graph:Graph, to_fix:tuple, meta_dumps) -> None:
@@ -599,7 +608,11 @@ class MultiObjectFixerFile:
         for prop in {PROV.invalidatedAtTime, PROV.hadPrimarySource, URIRef('https://w3id.org/oc/ontology/hasUpdateQuery')}:
             for s in graph.subjects():
                 if len(list(graph.objects(s, prop, unique=True))) > 1:
-                    creation_gen_time = min(graph.objects(creation_se_uri, PROV.generatedAtTime, unique=True))
+                    try:
+                        creation_gen_time = min(graph.objects(creation_se_uri, PROV.generatedAtTime, unique=True))
+                    except ValueError:
+                        logging.error(f"Could not find generatedAtTime value for creation snapshot {creation_se_uri}. Skipping MultiObjectFixerFile detection.")
+                        return None
                     return (graph.identifier, creation_gen_time)
     
 
@@ -734,7 +747,8 @@ def fix_provenance_process(
         data_dir,
         out_dir,
         meta_dumps_register,
-        dry_run=False,
+        dry_run_db=False,
+        dry_run_files=False,
         dry_run_callback=None,
         chunk_size=100,
         failed_queries_fp=f"prov_fix_failed_queries_{datetime.today().strftime('%Y-%m-%d')}.txt",
@@ -752,10 +766,10 @@ def fix_provenance_process(
     This function processes all provenance JSON-LD files in ``data_dir`` and detects common
     issues: fillers, invalid datetime formats, missing primary sources, multiple processing
     agents, and multiple object occurrences. It applies fixes locally to an ``rdflib.Dataset`` 
-    corresponding to each file and, unless ``dry_run`` is ``True``, issues SPARQL UPDATE 
-    requests to ``endpoint``. When not running in dry-run mode, fixed datasets are dumped to 
+    corresponding to each file and, unless ``dry_run_db`` is ``True``, issues SPARQL UPDATE 
+    requests to ``endpoint``. If ``dry_run_files`` is ``False``, fixed datasets are dumped to 
     a file in a subdirectory of ``out_dir`` with a path derived from the input file path 
-    relative to ``data_dir``.
+    relative to ``data_dir`` (else, no output files are written).
 
     :param str endpoint: URL of the SPARQL endpoint used to apply updates.
     :param str data_dir: Path to the directory containing provenance JSON-LD dump files to
@@ -763,10 +777,11 @@ def fix_provenance_process(
     :param str out_dir: Path where fixed JSON-LD files will be written.
     :param Iterable[Tuple[str, str]] meta_dumps_register: Iterable of ``(publication_date_iso,
         dump_url)`` pairs used to compute primary source URIs.
-    :param bool dry_run: If ``True``, no SPARQL updates are sent and no output files are
-        written; instead ``dry_run_callback`` (if provided) is invoked per input file with
-        detected issues. Defaults to ``False``.
-    :param callable dry_run_callback: Callback invoked when ``dry_run`` is ``True`` with
+    :param bool dry_run_db: If ``True``, no SPARQL updates are sent to the endpoint.
+        Defaults to ``False``.
+    :param bool dry_run_files: If ``True``, no output files are written to ``out_dir``.
+        Defaults to ``False``.
+    :param callable dry_run_callback: Callback invoked when ``dry_run_db`` is ``True`` with
         signature ``(file_path, (ff_issues, dt_issues, mps_issues, pa_issues, mo_issues))``.
     :param int chunk_size: Number of items per SPARQL update batch. Defaults to ``100``.
     :param str failed_queries_fp: Path to a log file where failing SPARQL queries are appended.
@@ -871,7 +886,7 @@ def fix_provenance_process(
                         local_mapping = FillerFixerFile.map_se_names(to_delete, to_rename)
                         newest_names = list(set(local_mapping.values()))
 
-                        if not dry_run:
+                        if not dry_run_db:
                             sparql_update(client,
                                         FillerFixerFile.build_delete_sparql_query(t),
                                         failed_queries_fp)
@@ -895,7 +910,7 @@ def fix_provenance_process(
                             dt_c += len(issues)
                             DateTimeFixerFile.fix_local_graph(d, graph, issues)
 
-                if not dry_run:
+                if not dry_run_db:
                     for chunk in batched(dt_issues, chunk_size):
                         sparql_update(client,
                                     DateTimeFixerFile.build_update_query(chunk),
@@ -914,7 +929,7 @@ def fix_provenance_process(
                             mps_c += 1
                             MissingPrimSourceFixerFile.fix_local_graph(d, graph, issue, meta_dumps)
 
-                if not dry_run:
+                if not dry_run_db:
                     for chunk in batched(mps_issues, chunk_size):
                         sparql_update(client,
                                     MissingPrimSourceFixerFile.build_update_query(chunk, meta_dumps),
@@ -933,7 +948,7 @@ def fix_provenance_process(
                             pa_c += len(issues)
                             MultiPAFixerFile.fix_local_graph(d, graph, issues)
 
-                if not dry_run:
+                if not dry_run_db:
                     for chunk in batched(pa_issues, chunk_size):
                         sparql_update(client,
                                     MultiPAFixerFile.build_update_query(chunk),
@@ -952,7 +967,7 @@ def fix_provenance_process(
                             mo_c += 1
                             MultiObjectFixerFile.fix_local_graph(d, graph, issue, meta_dumps)
 
-                if not dry_run:
+                if not dry_run_db:
                     for chunk in batched(mo_issues, chunk_size):
                         sparql_update(client,
                                     MultiObjectFixerFile.build_update_query(chunk, meta_dumps),
@@ -963,7 +978,7 @@ def fix_provenance_process(
             # ---------------- WRITE OUTPUT (FIXED) FILE ----------------
             if not (resume and checkpoint.step_completed(Step.WRITE_FILE, file_index)):
                 
-                if not dry_run:
+                if not dry_run_files:
                     abs_data_dir = Path(data_dir).resolve()
                     abs_out_dir = Path(out_dir).resolve()
 
@@ -994,13 +1009,13 @@ def fix_provenance_process(
 
             # Periodically recreate SPARQLClient to prevent pycurl's accumulated state degradation
             client_reset_counter += 1
-            if not dry_run and client_reset_counter >= client_recreate_interval:
+            if not dry_run_db and client_reset_counter >= client_recreate_interval:
                 logging.debug(f"Recreating SPARQLClient after {client_reset_counter} files to clear accumulated pycurl state")
                 client.close()
                 client = SPARQLClient(endpoint)
                 client_reset_counter = 0
 
-            if dry_run and dry_run_callback:  # use callback function to use issues found in each file
+            if dry_run_db and dry_run_callback:  # use callback function to use issues found in each file
                 dry_run_callback(fp, (ff_issues_in_file, dt_issues, mps_issues, pa_issues, mo_issues))
             
             elapsed_file :float = time.time() - start_file

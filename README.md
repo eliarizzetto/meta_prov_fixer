@@ -42,7 +42,7 @@ The main CLI entrypoint is `meta_prov_fixer/main.py`. It accepts the following o
 
 - `-e`, `--endpoint` **(required)** — SPARQL endpoint URL.
 - `-i`, `--data-dir` **(required)** — Path to the directory containing the RDF files to process.
-- `-o`, `--out-dir` **(required)** — Directory where fixed files will be written. If this is the same as `--data-dir` and `--overwrite-ok` is not set, an error will be raised.
+- `-o`, `--out-dir` **(required)** — Directory where fixed files will be written. If this is same as `--data-dir` and `--overwrite-ok` is not set, an error will be raised.
 - `-m`, `--meta-dumps` **(required)** — Path to a JSON file with a list of `[date, URL]` pairs; the loader validates the structure (see "Input format for `--meta-dumps`" below).
 - `--chunk-size` — Number of detected issues included in each SPARQL update (default: `100`).
 - `--failed-queries-fp` — File path to log failed SPARQL update queries (default: `prov_fix_failed_queries_<YYYY-MM-DD>.txt`).
@@ -50,6 +50,10 @@ The main CLI entrypoint is `meta_prov_fixer/main.py`. It accepts the following o
 - `--overwrite-ok` — Allow overwriting input files when `--out-dir` equals `--data-dir` and the input files are decompressed `.json` (default: not set).
 - `--checkpoint-fp` — Path for the checkpoint file used to resume a run (default: `fix_prov.checkpoint.json`).
 - `--cache-fp` — Path for the issues cache file (default: `filler_issues.cache.json`).
+- `--dry-run-db` — Skip SPARQL updates to the endpoint (default: `False`). Useful for testing or when you only want to write fixed files.
+- `--dry-run-files` — Skip writing fixed files to out-dir (default: `False`). Useful when you only want to update the database.
+- `--dry-run-issues-dir` — Directory where to write issues found during dry-run as JSON-Lines files (default: `None`). Works with `--dry-run-db`.
+- `--dry-run-process-id` — Optional identifier for parallel execution (e.g., directory name like 'br', 'ar') to create unique filenames (default: `None`).
 
 ### Example
 
@@ -58,6 +62,22 @@ Detect issues from RDF files and fix them on the triplestore, and new correct co
 ```shell
 poetry run python meta_prov_fixer/main.py -e http://localhost:8890/sparql/ -i "../meta_prov/br" -o "../fixed/br" -m meta_dumps.json 
 ```
+
+### Dry-run mode
+
+Run without updating the database (only write fixed files):
+
+```shell
+poetry run python meta_prov_fixer/main.py -e http://localhost:8890/sparql/ -i "../meta_prov/br" -o "../fixed/br" -m meta_dumps.json --dry-run-db
+```
+
+Run dry-run mode and log all detected issues to JSON-Lines files for analysis:
+
+```shell
+poetry run python meta_prov_fixer/main.py -e http://localhost:8890/sparql/ -i "../meta_prov/br" -o "../fixed/br" -m meta_dumps.json --dry-run-db --dry-run-issues-dir "issues_output"
+```
+
+<!-- For detailed documentation on dry-run mode, issues logging, and parallel execution, see [DRY_RUN_USAGE.md](DRY_RUN_USAGE.md). -->
 
 ## Input format for `--meta-dumps`
 
@@ -86,5 +106,6 @@ The date format must be ISO-style (YYYY-MM-DD). The CLI loader validates the str
 
 ## Developer notes
 
-- Use `--dry-run` to get detected issues and simulate the pipeline without executing queries or updates to files. Dry runs require a callback function to be specified as the value of `dry_run_callback` parameter in `src.fix_provenance_process()`.
 - The pipeline uses a per-file and per-fixer checkpointing mechanism so long-running runs can be resumed after interruptions.
+- Dry-run mode with issues logging is supported via `--dry-run-db` and `--dry-run-issues-dir`. This allows you to process files, detect issues, write fixed files, and log all detected issues to JSON-Lines files without updating the SPARQL endpoint. <!-- See [DRY_RUN_USAGE.md](DRY_RUN_USAGE.md) for detailed documentation. -->
+- The `dry_run_callback` parameter in `src.fix_provenance_process()` allows custom callbacks for handling detected issues. The `meta_prov_fixer.dry_run_utils.create_dry_run_issues_callback()` function provides a ready-to-use callback that writes issues to JSON-Lines files with automatic chunking and parallel execution safety.
