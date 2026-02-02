@@ -733,7 +733,7 @@ def sparql_update(
 
     except (QueryError, EndpointError) as exc:
         # log both syntax errors and endpoint errors that weren't recoverable
-        logging.warning(f"SPARQL UPDATE failed after retries: {type(exc).__name__}: {exc}")
+        logging.warning(f"SPARQL UPDATE failed after retries: {type(exc).__name__}: {str(exc)[:1000].replace('\n', '\\n ')}...")
         with open(failed_log_fp, 'a', encoding='utf-8') as lf:
             lf.write(update_query.replace("\n", "\\n") + "\n")
             lf.write(f"# Failure: {type(exc).__name__}: {exc}\n\n")
